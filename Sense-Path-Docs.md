@@ -266,9 +266,9 @@ The mobile application features a runtime toggle allowing judges to switch the a
 
 ### 2. Automated ISRO Benchmark Suite
 The project evaluates IO-VNBD dataset compliance through `ml_pipeline/benchmark_suite.py`.
-- Computes **Maximum & Average Drift** (< 5 m over 50m outage).
-- Computes **Cumulative Drift Percentage** (< 10% over 1000m outage).
-- Automatically generates publication-quality data plots (`isro_benchmark_comparison.png`) and validation JSON reports.
+- Computes along-track drift for simulated 50 m / 1000 m outages from real model inference (speed only; heading error excluded).
+- Compares against hold-last-speed and constant-speed baselines.
+- Writes `benchmark_report.json` and `benchmark.png`; requires `--rate_hz` because the prepared CSVs carry no timestamps.
 
 ### 3. Live Web Dashboard
 For headless edge systems, the python backend serves a live UI telemetry dashboard at `http://localhost:8080/dashboard`.

@@ -10,7 +10,7 @@ Welcome to the official jury evaluation guide for **SensePath**, a state-of-the-
 >
 > To solve ISRO's IO-VNBD problem statement, we built **SensePath**. It completely eliminates the reliance on GNSS by using a customized CNN-GRU deep learning architecture that directly infers vehicle velocity from raw 6-axis IMU data. We fuse this AI prediction into an Error-State Extended Kalman Filter (ES-EKF) that mathematically enforces Non-Holonomic Constraints, preventing all lateral drift.
 >
-> What you are about to see is not a simulation. Our entire robotics stack runs natively on-device using ONNX Runtime. For high-end applications, we've also built a 200 Hz Edge FOG Engine over WebSockets. We achieve less than 10% drift error in full GNSS-denied environments. Let me show you how."
+> [DRAFT - rewrite after the model and benchmark are fixed; do not claim a drift figure that `ml_pipeline/benchmark_suite.py` has not produced.] The scenario replay in the app is a scripted demo, not a recorded drive. The 200 Hz edge engine currently runs on a simulated FOG feed."
 
 ---
 
@@ -42,16 +42,16 @@ flutter run --release
 
 ---
 
-## 📊 Key Verification Metrics
+## Verification Metrics
 
-The automated `benchmark_suite.py` proves our compliance with ISRO's targets:
+Only quote numbers produced by `python ml_pipeline/benchmark_suite.py --rate_hz <csv rate>` (writes
+`ml_pipeline/benchmark_report.json`). As of the last honest run the model did **not** meet the ISRO
+target (median 50 m along-track drift ~115 %, worse than a constant-speed baseline), so this table is
+intentionally empty until the model is retrained.
 
-| Metric | ISRO Target | SensePath Performance | Status |
+| Metric | ISRO Target | Measured | Source |
 | :--- | :--- | :--- | :--- |
-| **50m Outage Drift** | < 5 m (< 10%) | **1.4 m** | ✅ PASS |
-| **1000m Outage Drift** | < 100 m (< 10%) | **42.5 m** | ✅ PASS |
-| **GNSS Recovery Latency**| < 500 ms | **120 ms** | ✅ PASS |
-| **Edge Compute Rate** | 100+ Hz | **200 Hz** | ✅ PASS |
-
----
-*Good luck with the pitch! You've built a production-grade system.*
+| 50 m outage drift | < 10 % | _pending_ | benchmark_suite.py |
+| 1000 m outage drift | < 10 % | _pending_ | benchmark_suite.py |
+| GNSS recovery latency | milliseconds | _not measured_ | - |
+| Position update rate | 10 Hz phone / ~200 Hz edge | _not measured_ | - |
