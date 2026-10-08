@@ -1,0 +1,23 @@
+[
+  {
+    "timestamp": 1690000000000,
+    "ax": 0.0, "ay": 1.0, "az": 9.81,
+    "gx": 0.0, "gy": 0.0, "gz": 0.0,
+    "lat": 37.422, "lon": -122.084, "speed": 10.0, "bearing": 90.0,
+    "is_gnss_denied": false
+  },
+  {
+    "timestamp": 1690000000100,
+    "ax": 0.0, "ay": 1.0, "az": 9.81,
+    "gx": 0.0, "gy": 0.0, "gz": 0.0,
+    "lat": 37.422, "lon": -122.083, "speed": 10.0, "bearing": 90.0,
+    "is_gnss_denied": true
+  },
+  {
+    "timestamp": 1690000000200,
+    "ax": 0.0, "ay": 1.0, "az": 9.81,
+    "gx": 0.0, "gy": 0.0, "gz": 0.0,
+    "lat": 37.422, "lon": -122.082, "speed": 10.0, "bearing": 90.0,
+    "is_gnss_denied": true
+  }
+]

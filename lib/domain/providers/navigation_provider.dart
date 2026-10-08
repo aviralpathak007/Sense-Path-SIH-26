@@ -3,6 +3,7 @@ import 'package:latlong2/latlong.dart';
 import '../../data/models/kinematics.dart';
 import '../dr_engine/dead_reckoning_engine.dart';
 import '../../data/sensors/sensor_service.dart';
+import '../scenario/scenario_player.dart';
 
 final navigationProvider = NotifierProvider<NavigationNotifier, KinematicsState>(() {
   return NavigationNotifier();
@@ -11,6 +12,7 @@ final navigationProvider = NotifierProvider<NavigationNotifier, KinematicsState>
 class NavigationNotifier extends Notifier<KinematicsState> {
   late final DeadReckoningEngine _engine;
   late final SensorService _sensorService;
+  late final ScenarioPlayer _scenarioPlayer;
   
   // Track paths
   final List<LatLng> _historicalPath = [];
@@ -43,6 +45,8 @@ class NavigationNotifier extends Notifier<KinematicsState> {
     
     _sensorService = SensorService(_engine);
     await _sensorService.start();
+
+    _scenarioPlayer = ScenarioPlayer(this);
   }
 
   void _handleEngineUpdate(EngineStateUpdate update) {
@@ -80,9 +84,20 @@ class NavigationNotifier extends Notifier<KinematicsState> {
     _engine.calibrateMount();
   }
 
-  void loadPresetScenario() {
-    // For demo purposes, we can artificially move the position
-    // Real implementation would read from a JSON/CSV dataset and feed it to the engine
+  void loadPresetScenario(String path) {
+    _scenarioPlayer.playScenario(path);
+  }
+
+  void feedEngineSensorData(SensorData data) {
+    _engine.feedSensorData(data);
+  }
+
+  void setSimulatedOutageFlag(bool isOutage) {
+    toggleSimulateOutage(isOutage);
+  }
+
+  void feedEngineGpsData(LatLng pos, double bearing, double speed) {
+    _engine.feedGpsData(pos, bearing, speed);
   }
 
 }

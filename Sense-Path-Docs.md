@@ -208,3 +208,25 @@ The `KalmanFilter` maintains a highly optimized 5DOF state vector `[Latitude, Lo
 ### 3. Offline Map Matching
 To guarantee <10% drift during extended urban canyon/tunnel blackouts, `MapMatcher` ingests a raw GeoJSON file (`sample_road_network.json`) into memory.
 - During outages, if the vehicle's heading is parallel to a known road segment (within 45 degrees), the estimated coordinates are strictly snapped onto the road polyline geometry.
+
+---
+
+## Phase 4: Scenario Replay & 200 Hz Edge Engine
+
+### 1. Flutter Scenario Playback Engine
+To facilitate interactive judging and demonstrations without driving the vehicle, SensePath includes a live scenario replay system (`ScenarioPlayer`).
+- **Data Source**: Pre-packaged JSON datasets in `assets/scenarios/` (e.g., `tunnel_blackout_scenario.json`) simulate 6-axis IMU strings, GPS fixes, and GNSS-denial flags.
+- **Execution**: Tapping "Load Preset Scenario" in the `HackathonControls` FAB streams this JSON payload into the `DeadReckoningEngine` isolate at 10Hz. 
+- **Validation**: During the playback, a dual-line trajectory tracks both the Ground Truth GPS (Green Line) against the AI Dead Reckoning estimate (Orange Line). The `TelemetryHud` displays real-time `Drift` metrics in meters using Haversine distance, ensuring visually verifiable <10% cumulative drift constraints.
+
+### 2. Standalone Edge Deployable Engine (FOG IMU)
+To meet the ISRO constraints for high-precision, external edge node processing (such as a Raspberry Pi or Nvidia Jetson wired to a Fiber Optic Gyroscope), the system features a headless Python service inside `edge_engine/`.
+- **FOG Streamer**: Simulates a high-rate 200 Hz external IMU feed.
+- **Asynchronous ES-EKF Fusion**: A highly optimized version of the filter decodes the 200 Hz feed, performing state prediction at 200 Hz, while asynchronously decimating the input to 100Hz 1-second rolling windows to query the ONNX AI model natively via `CPUExecutionProvider`.
+- **WebSocket Streaming**: Exposes a real-time `/ws/telemetry` WebSocket broadcasting 5-DOF Position-Velocity-Attitude (PVA) states.
+- **Usage**:
+  ```bash
+  cd edge_engine
+  ./run_edge.sh
+  ```
+  Check the performance via `curl http://localhost:8080/health`.

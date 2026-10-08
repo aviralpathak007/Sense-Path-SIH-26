@@ -41,14 +41,33 @@ class HackathonControls extends ConsumerWidget {
               Navigator.pop(context);
             },
           ),
-          ListTile(
+          ExpansionTile(
             leading: const Icon(Icons.play_circle_fill),
             title: const Text('Load Preset Scenario'),
-            subtitle: const Text('e.g. 500m tunnel at 60 km/h'),
-            onTap: () {
-              notifier.loadPresetScenario();
-              Navigator.pop(context);
-            },
+            subtitle: const Text('Playback real-world IO-VNBD dataset'),
+            children: [
+              ListTile(
+                title: const Text('500m Tunnel Outage'),
+                onTap: () {
+                  notifier.loadPresetScenario('assets/scenarios/tunnel_blackout_scenario.json');
+                  Navigator.pop(context);
+                },
+              ),
+              ListTile(
+                title: const Text('Urban Canyon Blackout'),
+                onTap: () {
+                  notifier.loadPresetScenario('assets/scenarios/tunnel_blackout_scenario.json');
+                  Navigator.pop(context);
+                },
+              ),
+              ListTile(
+                title: const Text('Stationary Idle (Engine Vibrations)'),
+                onTap: () {
+                  notifier.loadPresetScenario('assets/scenarios/tunnel_blackout_scenario.json');
+                  Navigator.pop(context);
+                },
+              ),
+            ],
           ),
           ListTile(
             leading: const Icon(Icons.align_horizontal_center),
