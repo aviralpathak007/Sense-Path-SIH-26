@@ -1,8 +1,11 @@
 """Load IO-VNBD runs (from prepare_runs.py), time-align them and attach deployment-style features."""
 import os
+import sys
 
 import numpy as np
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "edge_engine"))
+from idr_core import FeatureStream, ForwardAxisCalibrator  # noqa: E402
 from features import DT, axis_from_accel, decompose, imu_lag, smooth, vehicle_features
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -37,3 +40,30 @@ def load_run(name):
     r.update(name=name, lag_s=lag * DT, speed_corr=corr, theta=theta, axis_quality=q, valid_frac=float(ok.mean()))
     r["feat"] = vehicle_features(r["acc"], r["gyro"], theta) if theta is not None else None
     return r
+
+
+def streaming_axis(run):
+    """Deployable forward-axis estimate over time: calibrated causally from 1 Hz speed fixes.
+
+    Returns (theta_t, base) where base[:, :5] = [a1, a2, a_v, w_up, w_h]; theta_t is NaN until the
+    calibrator is ready. 1 Hz vehicle speed stands in for GNSS speed (see Sense-Path-Docs.md).
+    """
+    fs, cal = FeatureStream(), ForwardAxisCalibrator()
+    n = len(run["acc"])
+    base, theta = np.zeros((n, 5)), np.full(n, np.nan)
+    for i in range(n):
+        base[i] = fs.update(run["acc"][i], run["gyro"][i])
+        cal.on_imu(base[i, 0], base[i, 1])
+        if i % 10 == 0:
+            cal.on_gnss(run["gt_speed"][i], i * DT)
+        if cal.theta is not None:
+            theta[i] = cal.theta
+    return theta, base
+
+
+def rotate_features(base, theta):
+    c, s = np.cos(theta), np.sin(theta)
+    out = base.copy()
+    out[:, 0] = c * base[:, 0] + s * base[:, 1]
+    out[:, 1] = -s * base[:, 0] + c * base[:, 1]
+    return out

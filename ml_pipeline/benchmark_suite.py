@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 
 from dr_net import DRNet
 from features import DT, scale_features
-from runs import ROOT, TEST, load_run
+from runs import ROOT, TEST, load_run, rotate_features, streaming_axis
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUTAGES_M = (50, 1000)
@@ -40,10 +40,16 @@ def to_xy(lat, lon, lat0, lon0):
     return ((lon - lon0) * 111320.0 * np.cos(np.deg2rad(lat0)), (lat - lat0) * 110574.0)
 
 
-def simulate(model, run, starts, tmax):
+def run_features(run, s, tmax, axis):
+    if axis == "offline":
+        return run["feat"][s:s + tmax]
+    return rotate_features(run["base"][s:s + tmax], run["theta_t"][s])   # axis frozen at outage start
+
+
+def simulate(model, run, starts, tmax, axis):
     n = len(run["gt_speed"])
-    starts = [s for s in starts if s + tmax + 1 < n]
-    feats = np.stack([scale_features(run["feat"][s:s + tmax]) for s in starts])
+    starts = [s for s in starts if s + tmax + 1 < n and (axis == "offline" or not np.isnan(run["theta_t"][s]))]
+    feats = np.stack([scale_features(run_features(run, s, tmax, axis)) for s in starts])
     gt = np.stack([run["gt_speed"][s + 1:s + tmax + 1] for s in starts])
     v0 = np.array([[run["gt_speed"][s]] for s in starts])
     with torch.no_grad():
@@ -52,14 +58,14 @@ def simulate(model, run, starts, tmax):
     return starts, {"drnet": v_net, "hold": np.repeat(v0, tmax, 1), "integ": v_int, "oracle": gt}, gt
 
 
-def evaluate(model, runs, length_m):
+def evaluate(model, runs, length_m, axis):
     tmax = TMAX[length_m]
     res = {m: {"drift": [], "pos": []} for m in METHODS}
     examples = None
     for run in runs:
         n = len(run["gt_speed"])
         starts = [s for s in range(1000, n - tmax - 2, 150) if run["gt_speed"][s] > 3.0]
-        starts, vel, gt = simulate(model, run, starts, tmax)
+        starts, vel, gt = simulate(model, run, starts, tmax, axis)
         lat0, lon0 = run["gt_lat"], run["gt_lon"]
         xg, yg = to_xy(run["gt_lat"], run["gt_lon"], run["gt_lat"][0], run["gt_lon"][0])
         for i, s in enumerate(starts):
@@ -102,12 +108,15 @@ def main(a):
     model.load_state_dict(torch.load(a.model, map_location="cpu"))
     model.eval()
     runs = [load_run(n) for n in a.runs]
+    for r in runs:
+        r["theta_t"], r["base"] = streaming_axis(r)
     report = {"model": os.path.relpath(a.model, ROOT), "test_runs": a.runs,
+              "forward_axis": a.axis,
               "note": "heading for 2D error is ground-truth heading; along-track drift is the speed-only metric",
               "outages": {}}
     box, example = {}, None
     for L in OUTAGES_M:
-        res, ex = evaluate(model, runs, L)
+        res, ex = evaluate(model, runs, L, a.axis)
         report["outages"][f"{L}m"] = {m: stats(res[m]["drift"], res[m]["pos"]) for m in METHODS}
         box[L] = res
         example = example or ex
@@ -150,6 +159,8 @@ def plot(a, box, example):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=os.path.join(ROOT, "dr_net.pt"))
+    ap.add_argument("--axis", choices=["stream", "offline"], default="stream",
+                    help="stream = calibrated causally from 1 Hz speed fixes (deployable); offline = oracle fit")
     ap.add_argument("--runs", nargs="+", default=TEST)
     ap.add_argument("--report", default=os.path.join(HERE, "benchmark_report.json"))
     ap.add_argument("--figure", default=os.path.join(HERE, "benchmark.png"))
