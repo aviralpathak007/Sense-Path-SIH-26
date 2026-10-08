@@ -1,57 +1,35 @@
-# 🚀 SensePath - ISRO Smart India Hackathon Demo Guide
+# Sense-Path: Demo Guide
 
-Welcome to the official jury evaluation guide for **SensePath**, a state-of-the-art Intelligent Dead Reckoning (IDR) navigation suite designed to solve ISRO's IO-VNBD GNSS-denied navigation problem.
+Say only what the benchmark measured. Numbers below come from `ml_pipeline/benchmark_report.json`
+(held-out driver, simulated outages on IO-VNBD); regenerate with `python ml_pipeline/benchmark_suite.py`.
 
----
+## What to show (5 minutes)
 
-## 🎤 2-Minute Elevator Pitch
+1. **Start the edge engine** (`cd edge_engine && ./run_edge.sh`, open `/dashboard`). Say it replays a real
+   recorded drive, interpolated to 200 Hz, standing in for an external FOG IMU.
+2. **App -> Judge Demo -> Load Preset Scenario -> "Held-out drive, 90 s GNSS outage (5x)".**
+   * First ~40 s: blue path, GNSS strong, HUD says it is calibrating mount axes from GNSS.
+   * At the outage: badge turns red ("Blackout - IDR Active"); orange dashed path = dead reckoning; green
+     = reference path (known only to the demo, never given to the engine); HUD shows the error vs reference
+     as metres and % of distance driven.
+   * When GNSS returns the position snaps back to GNSS.
+3. **Data Source Mode -> Edge engine (200Hz)** to show the same core running on the external IMU stream.
 
-> "Respected Jury, when a vehicle enters a 1-kilometer tunnel or an urban canyon, GPS signals completely drop out. Traditional dead reckoning systems drift by hundreds of meters within seconds, making them useless. 
->
-> To solve ISRO's IO-VNBD problem statement, we built **SensePath**. It completely eliminates the reliance on GNSS by using a customized CNN-GRU deep learning architecture that directly infers vehicle velocity from raw 6-axis IMU data. We fuse this AI prediction into an Error-State Extended Kalman Filter (ES-EKF) that mathematically enforces Non-Holonomic Constraints, preventing all lateral drift.
->
-> [DRAFT - rewrite after the model and benchmark are fixed; do not claim a drift figure that `ml_pipeline/benchmark_suite.py` has not produced.] The scenario replay in the app is a scripted demo, not a recorded drive. The 200 Hz edge engine currently runs on a simulated FOG feed."
+## What to claim (and not)
 
----
+* Claim: the learned model cuts naive dead-reckoning drift by more than half on a driver it never saw, and
+  the same code runs on phone and edge.
+* Claim: mount orientation is not assumed; forward and yaw axes are learned from GNSS before the outage.
+* Do **not** claim the 10 % target is met reliably or that this was tested in a car. Expect the demo error
+  to be roughly 10-15 % of distance on this scenario (91 m / 651 m in our runs), and larger on other windows.
+* Do **not** call the 200 Hz feed a FOG: it is a replay.
 
-## 💻 Step-by-Step Demonstration
+## Measured results (held-out Driver A)
 
-### 1. Launch the Environment
-Before the judges arrive, start the unified demo launcher. This spins up the Edge FOG Engine and opens the web dashboard on your laptop:
-```bash
-./run_demo.sh
-```
+| Outage | Naive DR (hold speed) | SensePath median drift | Within 10 % |
+|---|---|---|---|
+| 50 m | 8.4 % | 7.4 % | 60 % |
+| 1 km | 24.8 % | 9.4 % | 53 % |
 
-Next, open the Flutter App on the connected physical Android/iOS device:
-```bash
-flutter run --release
-```
-
-### 2. Dual-Source Telemetry Demo
-1. Show the judges the laptop screen running the **Live Web Visualizer** (`http://localhost:8080/dashboard`). Explain this is the 200 Hz Fiber Optic Gyro (FOG) Edge engine.
-2. On the **Flutter App**, tap the **Judge Demo** FAB (Floating Action Button).
-3. Under **Data Source Mode**, toggle from `Internal (10Hz)` to `Edge FOG (200Hz)`.
-4. *Watch as the Flutter app instantly synchronizes with the laptop dashboard via WebSockets!*
-
-### 3. The Tunnel Blackout Scenario (1km Outage)
-1. Tap the **Judge Demo** FAB on the app.
-2. Select **Load Preset Scenario** > **500m Tunnel Outage**.
-3. **Point out the HUD:** The GNSS badge will flash red (`GNSS: Blackout`). 
-4. **Point out the Map:** A dual-line trajectory will draw. Green is the Ground Truth GPS, and Orange is the AI Dead Reckoning.
-5. **Show the Drift Metric:** As the playback runs, point to the live `Drift` metric in the HUD to prove the error stays under 10% of the total distance!
-
----
-
-## Verification Metrics
-
-Only quote numbers produced by `python ml_pipeline/benchmark_suite.py --rate_hz <csv rate>` (writes
-`ml_pipeline/benchmark_report.json`). As of the last honest run the model did **not** meet the ISRO
-target (median 50 m along-track drift ~115 %, worse than a constant-speed baseline), so this table is
-intentionally empty until the model is retrained.
-
-| Metric | ISRO Target | Measured | Source |
-| :--- | :--- | :--- | :--- |
-| 50 m outage drift | < 10 % | _pending_ | benchmark_suite.py |
-| 1000 m outage drift | < 10 % | _pending_ | benchmark_suite.py |
-| GNSS recovery latency | milliseconds | _not measured_ | - |
-| Position update rate | 10 Hz phone / ~200 Hz edge | _not measured_ | - |
+Position error with the gyro heading at 1 km outages is ~280 m median: heading is the known weak point
+(next step: magnetometer / road-heading constraint / HMM map matching).

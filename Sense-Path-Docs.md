@@ -1,298 +1,163 @@
-# Sense-Path-Docs
+# Sense-Path: Technical Documentation
 
-## Overview
+SensePath turns a smartphone into an Intelligent Dead Reckoning (IDR) navigator: while GNSS is good it
+follows GNSS; when GNSS drops it keeps estimating speed and heading from the phone's accelerometer and
+gyroscope with a small learned model, and returns to GNSS when it comes back. A second, headless engine
+runs the same core on an external IMU stream.
 
-SensePath is an Intelligent Dead Reckoning (IDR) navigation system built with Flutter. It is designed to function fully offline, track vehicle kinematics continuously (10-50 Hz), and seamlessly handle GNSS blackouts using smartphone IMU sensors (accelerometer and gyroscope). 
+> **Status in one paragraph.** The pipeline works end to end (trained model, Dart app, edge engine,
+> scenario replay, real OSM roads), and the learned model clearly beats naive dead reckoning on drivers
+> it never saw. It does **not** yet meet the PS target of <10 % drift reliably (about half of 1 km outages
+> land within 10 %), position error is dominated by gyro heading drift, and nothing has yet been tested
+> on a phone in a moving vehicle. Section 7 lists every limitation.
 
-This documentation serves as a comprehensive guide to the architecture, state management, and implementation details of the application for future reference and learning.
+## 1. Architecture
 
-## Table of Contents
-
-1. [Tech Stack & Technologies Used](#tech-stack--technologies-used)
-2. [Architecture & Patterns](#architecture--patterns)
-3. [Core Components](#core-components)
-    - [State Management (Riverpod)](#state-management-riverpod)
-    - [Background Processing (Dart Isolates)](#background-processing-dart-isolates)
-    - [Sensor Integration](#sensor-integration)
-4. [User Interface (UI)](#user-interface-ui)
-    - [Navigation Map](#navigation-map)
-    - [Heads-Up Display (HUD)](#heads-up-display-hud)
-    - [Hackathon Demo Controls](#hackathon-demo-controls)
-5. [File Structure Overview](#file-structure-overview)
-6. [Phase 2: ML Pipeline & Kinematics Engine](#phase-2-ml-pipeline--kinematics-engine)
-    - [Dataset Preprocessing (IO-VNBD)](#dataset-preprocessing-io-vnbd)
-    - [CNN-GRU Architecture](#cnn-gru-architecture)
-    - [Benchmarks & Evaluation](#benchmarks--evaluation)
-    - [Training & Export Instructions](#training--export-instructions)
-
----
-
-## Tech Stack & Technologies Used
-
-SensePath leverages a polyglot architecture combining edge AI, mobile frontend, and high-performance backend microservices.
-
-**Frontend (Mobile & Web)**
-- **Flutter & Dart**: The core mobile application, utilizing the `flutter_map` library for vector/raster tile rendering and `latlong2` for geospatial math.
-- **Riverpod**: Robust reactive state management driving the `KinematicsState`.
-- **Leaflet.js & HTML/CSS**: Powers the headless edge server's Live Jury Dashboard, served natively to any browser.
-
-**Artificial Intelligence & Edge Compute**
-- **PyTorch**: Used in `ml_pipeline/` to define, train, and benchmark the `KinematicVelocityNet` (1D CNN + BiGRU).
-- **ONNX (Open Neural Network Exchange)**: The PyTorch model is exported to `.onnx` to bypass Apple Silicon compilation deadlocks.
-- **onnxruntime (Flutter binding)**: Natively executes the AI inference entirely on-device (via `CPUExecutionProvider`) inside a Dart background isolate.
-
-**Backend & Telemetry (Phase 4/5 Edge Engine)**
-- **Python 3.9+**: Powers the external 200 Hz Edge Engine (`edge_engine/`).
-- **FastAPI & Uvicorn**: Serves both the static HTML dashboard and the high-speed WebSockets for telemetry synchronization.
-- **WebSockets (`web_socket_channel`)**: Streams 5-DOF Position-Velocity-Attitude (PVA) state vectors from the Edge Engine directly into the Flutter app seamlessly.
-
----
-
-
-
-## Architecture & Patterns
-
-The application follows a **Feature-First Clean Architecture**, separating the application into distinct layers:
-
-- **Data Layer:** Responsible for fetching raw data from hardware sensors (`sensors_plus`, `geolocator`) and defining the data models.
-- **Domain Layer:** Contains the core business logic, including the Dead Reckoning (DR) math engine running in a background isolate, and the Riverpod providers that orchestrate state changes.
-- **Presentation Layer:** Contains purely UI components (widgets, screens) that react to the state provided by the Domain Layer.
-
----
-
-## Core Components
-
-### State Management (Riverpod)
-
-The application uses `NotifierProvider` from the `flutter_riverpod` package to manage the `KinematicsState`.
-
-- **`KinematicsState`:** An immutable data class containing the current vehicle position, bearing, speed, cumulative drift, GNSS status, and historical paths.
-- **`NavigationNotifier`:** A `Notifier` class that initializes the sensor services and the DR engine. It listens to the updates from the background isolate and updates the UI state reactively.
-
-### Background Processing (Dart Isolates)
-
-To maintain a smooth 60/120 FPS UI, all heavy math and constant sensor stream processing are offloaded to a **Dart Isolate**.
-
-- **`DeadReckoningEngine`:** Uses `Isolate.spawn` to create an independent thread of execution.
-- **Communication:** The main UI thread and the Isolate communicate via `SendPort` and `ReceivePort`. 
-  - The UI sends `UpdateSensorMsg` and `UpdateGpsMsg`.
-  - The Isolate processes these using Haversine formulas and simplified matrix math, then sends back `EngineStateUpdate` containing the new coordinates and drift metrics.
-
-### Sensor Integration
-
-The `SensorService` class bridges the hardware to the software.
-- **`geolocator`:** Streams raw GPS fixes when available.
-- **`sensors_plus`:** Streams `userAccelerometerEventStream` and `gyroscopeEventStream` at `SensorInterval.gameInterval` (~50 Hz) to capture rapid vehicle kinematics.
-
----
-
-## User Interface (UI)
-
-### Navigation Map
-
-Built using `flutter_map` and `latlong2`, ensuring offline capability by caching OpenStreetMap tiles.
-
-- **Dual-Path Rendering:** The map utilizes `PolylineLayer` to draw the historical ground-truth path (Solid Green) and the AI Dead Reckoning trajectory (Dashed Orange).
-- **Custom Puck:** The vehicle marker (`CustomPuck.dart`) uses `AnimatedRotation` to smoothly interpolate (slerp) the bearing angle as updates arrive.
-
-### Heads-Up Display (HUD)
-
-- **`GnssBadge`:** A dynamic top app bar chip that changes color based on the current `GnssStatus` (Strong/Green, Degraded/Orange, Blackout/Red).
-- **`TelemetryHud`:** A bottom panel that reads out the current AI-predicted velocity, cumulative drift (meters), and alignment matrix status.
-
-### Hackathon Demo Controls
-
-A Floating Action Button opens a bottom sheet with tools for testing the app in a controlled environment:
-- **Simulate GNSS Outage:** Instantly cuts off the `geolocator` feed and forces the app to rely purely on the IMU Dead Reckoning isolate.
-- **Load Preset Scenario:** (Placeholder) Designed to load pre-recorded JSON/CSV kinematics data like the IO-VNBD dataset.
-- **Calibrate Mount:** Simulates the phone-to-vehicle reference frame re-alignment routine.
-
----
-
-## File Structure Overview
-
-```text
-lib/
-├── data/
-│   ├── models/
-│   │   └── kinematics.dart          # Data structures for state & sensor payload
-│   └── sensors/
-│       └── sensor_service.dart      # Streams IMU and GPS data
-├── domain/
-│   ├── dr_engine/
-│   │   └── dead_reckoning_engine.dart # Dart Isolate running the math computations
-│   └── providers/
-│       └── navigation_provider.dart # Riverpod state manager
-├── presentation/
-│   ├── screens/
-│   │   └── navigation_map_screen.dart # Main view with MapLibre/flutter_map
-│   └── widgets/
-│       ├── custom_puck.dart         # Animated navigation marker
-│       ├── hackathon_controls.dart  # Judge Demo toggle/simulators
-│       └── hud_overlay.dart         # Telemetry & GNSS status chips
-└── main.dart                        # ProviderScope & Theme Entry Point
+```
+phone IMU (accel incl. gravity, gyro) --50 Hz--> average to 10 Hz
+GNSS fix (1 Hz, accuracy gated)
+        |
+        v
+ FeatureStream            gravity estimate, gravity-aligned accel decomposition
+ ForwardAxisCalibrator    learns the vehicle forward direction from GNSS speed changes
+ YawAxisCalibrator        learns gyro -> heading-rate from GNSS bearing changes (mount independent)
+        |  5 features: a_forward, a_lateral, a_vertical, heading rate, horizontal gyro norm
+        v
+ DRNet (GRU, 32 hidden, ONNX)   speed integrator seeded with the last GNSS speed
+        |
+        v
+ IdrNav   heading = integrated gyro (+ZUPT bias), position = speed x heading; GNSS fixes reset it
 ```
 
-## Setup & Run Instructions
+* **Mode switching.** GNSS is declared lost after 1.5 s without a usable fix (accuracy worse than 50 m
+  is ignored) or manually from the demo menu. On recovery the next GNSS fix overwrites position, heading
+  and speed.
+* **Calibration needs GNSS first.** The two axis calibrators need about 40 s of driving with GNSS before
+  the app can dead-reckon; until then it holds the last GNSS speed. The HUD shows the calibration state.
+* **Dart and Python are the same code.** `edge_engine/idr_core.py` + `idr_nav.py` are the reference;
+  `lib/domain/dr_engine/idr_core.dart` + `idr_nav.dart` are a port, checked against golden vectors
+  (`test/idr_core_test.dart`, generated by `tests/make_golden.py`). `tests/test_parity.py` checks the
+  streaming core against the vectorised training features.
 
-1. Ensure your device has location permissions enabled.
-2. For iOS, ensure `NSLocationWhenInUseUsageDescription` is in `ios/Runner/Info.plist`.
-3. For Android, ensure `android.permission.ACCESS_FINE_LOCATION` is in `android/app/src/main/AndroidManifest.xml`.
-4. Run the app: `flutter run`
+## 2. Data
 
----
+IO-VNBD, 10 Hz phone IMU ("S" files) + vehicle logger ("V" files: speed, heading, position).
+`ml_pipeline/prepare_runs.py` downloads (Git LFS) and merges runs into `data/runs/*.npz`.
 
-## Phase 2: ML Pipeline & Kinematics Engine
+Things we found that matter, because earlier versions of this repo got them wrong:
 
-The Intelligent Dead Reckoning (IDR) relies on a deep learning model to estimate forward velocity purely from IMU data during GNSS blackouts. The pipeline is located in the `ml_pipeline` folder and uses PyTorch.
+* **The rate is 10 Hz, not 100 Hz.** Ground-truth speed changes by a median 0.06 m/s per row, which is
+  only plausible at 10 Hz. The old 100-sample "1-second" windows were really 10 s.
+* **S and V files are not sample-synchronised.** The lag between the phone and the vehicle record varies
+  by run (from <1 s to ~30 s). Each run is shifted by the lag at which the phone accelerometer best
+  explains the vehicle's longitudinal acceleration (`features.imu_lag`).
+* **The dataset's gyro axes are not in the accelerometer's frame.** Projecting gyro onto gravity gives
+  almost no correlation with heading rate in the runs where turns can be measured; the second gyro column
+  is the yaw axis (corr 0.5-0.6 in Driver A/B runs). This is why the yaw axis is *calibrated from GNSS*
+  and not assumed.
+* **Run selection.** Runs whose phone and vehicle records could not be aligned (A_S4, D_Y1, E_Vtb1) were
+  excluded; B_M has a weak alignment fit (0.21) but is the largest run and is used for training.
+* In the benchmark the vehicle logger's 1 Hz speed/bearing stands in for "GNSS" when calibrating the axes
+  (the phone's own GPS column is not time-aligned in this dataset).
 
-### Dataset Preprocessing (IO-VNBD)
+## 3. Model and training
 
-The IO-VNBD dataset provides synchronized vehicle GPS and smartphone IMU telemetry. The pipeline prepares this data as follows:
-- **Feature Extraction**: 6-axis IMU data (3-axis accelerometer and 3-axis gyroscope) is extracted and Z-score normalized.
-- **Sliding Windows**: The continuous data stream is chunked into 1-second sequences (100 samples at 100 Hz) using a sliding window approach with a 50% overlap.
-- **Target Value**: The ground-truth forward vehicle velocity at the end of the sliding window is extracted from GPS/odometry columns for supervision.
+`ml_pipeline/dr_net.py`: a GRU cell whose output is a bounded correction to the measured forward
+acceleration plus a learned stop-gate; speed is integrated *inside* the network, so it is trained end to
+end on 30 s outage-like sequences (`ml_pipeline/train_dr.py`) that start from the true speed, with
+augmentation (forward-axis error up to 8 degrees, accelerometer bias). Loss: L1 on speed + integrated
+distance error. 20 KB; exported with `ml_pipeline/export_dr_onnx.py` (checked against PyTorch over 300
+chained steps, max difference 3e-5).
 
-### CNN-GRU Architecture
+* Train: B_M, E_Vfa2, E_Vtb5. Validation / early stopping: E_Vfa1. **Test: Driver A (A_S1, A_S2), never
+  touched during training or model selection** (an earlier model version was scored on it once; the final
+  features/model were selected on validation only).
+* Reproduce: `python ml_pipeline/prepare_runs.py && python ml_pipeline/train_dr.py --iters 3000 &&
+  python ml_pipeline/export_dr_onnx.py && python ml_pipeline/benchmark_suite.py`.
 
-The core of the kinematics engine is the `KinematicVelocityNet` (`model.py`), which leverages a hybrid deep learning architecture:
-1. **1D CNN Layer**: Acts as a high-frequency filter, using two convolutional blocks (`Conv1d` + `ReLU` + `MaxPool1d`) to suppress road vibrations and isolate vehicle dynamics.
-2. **Bidirectional GRU**: A 2-layer BiGRU captures the complex temporal dependencies and integration mechanics required to convert acceleration events into velocity states over the window period.
-3. **Dense Regression Head**: The output of the final time step is passed through a dense layer with dropout, producing a single continuous output predicting the current forward velocity in m/s.
+## 4. Results (held-out Driver A, `ml_pipeline/benchmark_report.json`)
 
-### Benchmarks & Evaluation
+Every start point in the test runs is simulated as a GNSS outage that begins with the true speed and lasts
+until the vehicle has travelled 50 m / 1 km. Drift = |integrated speed error| / distance travelled
+(along-track). Position error integrates speed along either the true heading (isolates speed error) or
+the gyro heading (what the app does, starting from the true heading).
 
-The pipeline includes an evaluation script (`evaluate.py`) that runs inference on a test sequence and generates a matplotlib chart (`drift_benchmark.png`). This benchmark compares:
-- **Ground Truth Velocity**: The true speed recorded by vehicle odometry.
-- **Raw Double-Integration**: A classical naive approach plotting velocity from integrating forward acceleration, demonstrating rapid exponential drift.
-- **AI-Predicted Velocity**: The stable, drift-corrected predictions from the `KinematicVelocityNet`.
+| Outage | Method | Outages | Median drift | p95 drift | Within 10 % | Median position error (true heading) | Median position error (gyro heading) |
+|---|---|---|---|---|---|---|---|
+| 50 m | **SensePath DRNet** | 740 | 7.4 % | 53 % | 60 % | 4 m | 5 m |
+| 50 m | Hold last GNSS speed | 740 | 8.4 % | 92 % | 56 % | 4 m | 5 m |
+| 50 m | Integrate accelerometer only | 740 | 9.5 % | 115 % | 51 % | 5 m | 6 m |
+| 50 m | (oracle: true speed) | 740 | 0.0 % | 0 % | 100 % | 0 m | 1 m |
+| 1 km | **SensePath DRNet** | 482 | 9.4 % | 37 % | 53 % | 102 m | 279 m |
+| 1 km | Hold last GNSS speed | 482 | 24.8 % | 77 % | 22 % | 197 m | 330 m |
+| 1 km | Integrate accelerometer only | 482 | 25.0 % | 87 % | 22 % | 208 m | 337 m |
+| 1 km | (oracle: true speed) | 482 | 0.0 % | 0 % | 100 % | 3 m | 227 m |
 
-### Training & Export Instructions
+![benchmark](ml_pipeline/benchmark.png)
 
-The ML pipeline is designed to automatically detect and utilize Apple Silicon `mps` or Nvidia `cuda` acceleration, falling back to CPU.
+Reading it honestly:
 
-**Dependencies:**
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install torch pandas numpy matplotlib onnx
-```
+* On 1 km outages the model more than halves the drift of naive dead reckoning (9.4 % vs 25 %), and 53 % of
+  outages are within the 10 % target, but p95 is 37 %.
+* On 50 m outages the gain is small (7.4 % vs 8.4 % median): short outages are dominated by noise.
+* Ablation (1 km): zeroing the accelerometer features raises median drift from 12 % to 46 %, zeroing all
+  features to ~98 %: the model really uses the IMU, not a speed prior.
+* **Heading is the larger problem.** With the *true* speed and the gyro heading, the median 1 km position
+  error is still 227 m. The target position error is not met.
+* The ISRO example target "<5 m over 50 m" corresponds to 10 %; our median is 7.4 % but ~40 % of outages exceed it.
 
-**1. Preparing the Real Dataset:**
-Extract the raw Git LFS IO-VNBD dataset using the included python script to format it for our model (this fetches the true dataset, not the LFS pointers!):
-```bash
-python3 prepare_data.py
-```
+End-to-end check (`edge_engine`, one 90 s / 651 m outage in the demo scenario, Python and the macOS app
+agree): 91 m final error (14 %). That is one window, not a statistic; use the table above.
 
-**2. Training the Model:**
-Run the training script with paths to your train and validation IO-VNBD splits. It uses Mean Squared Error (MSE) loss, the Adam optimizer, and implements early stopping based on validation loss.
-```bash
-python3 ml_pipeline/train.py --train_csv data/train_iovnbd.csv --val_csv data/val_iovnbd.csv
-```
+## 5. App (Flutter)
 
-**3. Running the Benchmark:**
-Generate the drift benchmark plot against a test sequence:
-```bash
-python3 ml_pipeline/evaluate.py --test_csv data/test_iovnbd.csv
-```
+* `lib/domain/dr_engine/`: `idr_core.dart`, `idr_nav.dart`, `onnx_runner.dart` (ONNX Runtime, one GRU step
+  per 10 Hz tick), `map_matcher.dart`, and `dead_reckoning_engine.dart` (background isolate; sensors are
+  averaged 50 Hz -> 10 Hz there; assets are loaded on the main isolate because `rootBundle` does not exist
+  in a background isolate).
+* `lib/data/sensors/sensor_service.dart`: accelerometer **with gravity**, gyroscope, GNSS (accuracy passed
+  through).
+* UI: flutter_map with the bundled OpenStreetMap road network (`assets/maps/road_network.json`, 838 ways,
+  works offline), blue = position while GNSS is good, orange = dead-reckoned, green = reference path
+  (scenario replay only). HUD shows speed, error vs reference (or distance driven if there is no
+  reference), calibration state.
+* **Judge Demo menu.** Replay the held-out drive with a 90 s outage (5x or 1x): raw phone IMU goes into the
+  engine, fixes stop during the outage, the reference is used only to draw the green path and compute the
+  HUD error. Manual GNSS-outage switch, recalibrate mount, data source (internal / edge engine).
+* Map matching exists (`map_matcher.dart`, heading-gated nearest-road snap) but is **disabled**
+  (`_enableMapMatching = false`): we have not shown it helps with gyro heading this poor. It is not HMM
+  map matching.
+* No covariance-tracking EKF: IdrNav is a complementary-filter style loop. Magnetometer is not used.
 
-**4. Exporting for Edge Deployment (ONNX):**
-Convert the PyTorch `.pt` weights directly to `.onnx`. We bypass TFLite to avoid Apple Silicon C++ mutex compilation deadlocks:
-```bash
-python3 ml_pipeline/export_onnx.py
-```
-This generates `model.onnx` which is moved to the `assets/` directory of the Flutter app.
+Verification done: `flutter analyze` clean; `flutter test` (Dart vs Python golden vectors); macOS debug
+build; headless autoplay of the scenario on macOS (`flutter run -d macos --dart-define=AUTOPLAY_SCENARIO=true`)
+runs the real ONNX model in the engine isolate (about 70 m error after ~600 m of dead reckoning).
+**Not done: a run on a phone, and a real drive.**
 
-### Flutter ONNX Integration
+## 6. Edge engine (external IMU, 200 Hz)
 
-We use the official `onnxruntime` package for Flutter to execute the kinematics model directly in a Dart Isolate.
-- **`onnx_runner.dart`**: Contains the `OnnxVelocityEstimator` class that initializes the `OrtEnv` and `OrtSession` using the `model.onnx` asset.
-- **Input**: Accepts a 600-element `Float32List` representing the 1-second 6-axis IMU window (`1x6x100` tensor).
-- **Output**: Predicts real-time velocity instantly on the device, bridging the AI into the `DeadReckoningEngine` for continuous navigation during GPS blackouts!
+`edge_engine/`: FastAPI + WebSocket. `idr_core.py`/`idr_nav.py` run the AI step at 10 Hz; `edge_fusion.py`
+adds a 200 Hz heading/position propagation layer between AI steps. `replay_streamer.py` replays the
+held-out drive **interpolated from 10 Hz to 200 Hz** in place of a real FOG IMU: throughput and latency are
+real (about 0.04 ms per AI step, ~90,000 ticks/s offline), accuracy is the same as the 10 Hz pipeline
+(91 m / 14 % on the scenario), and the interpolated samples add no information. For a real 200 Hz IMU
+construct `EdgeFusionEngine(average=True)` (box-averages 20 samples into each AI sample) and replace
+`ReplaySource.tick` by a serial/UDP reader. There is no C++ implementation.
 
----
+Run: `cd edge_engine && ./run_edge.sh`, then `/health`, `/dashboard`, `ws://HOST:8080/ws/telemetry?speed=N`.
+`/health` reports measured rate and latency.
 
-## Phase 3: Sensor Fusion, Kinematic Constraints & Map Matching
+## 7. Limitations and next steps
 
-Phase 3 implements the full robotics math stack inside the Dart Isolate to translate raw AI predictions and sensor telemetry into map-matched geospatial coordinates.
-
-### 1. Frame Auto-Alignment Engine
-The smartphone can be mounted in any arbitrary orientation. The `AlignmentCalibrator` dynamically resolves the `R_phone_to_vehicle` rotation matrix by:
-- **Gravity Extraction**: Low-pass filtering stationary accelerometer data to find the global "Down" (Z) axis.
-- **Dynamic Forward Axis**: Monitoring acceleration during initial vehicle motion to find the "Forward" (X) axis orthogonal to gravity.
-- **Cross Product**: Deriving the lateral (Y) axis, forming a complete frame transformation.
-
-### 2. Error-State Extended Kalman Filter (ES-EKF)
-The `KalmanFilter` maintains a highly optimized 5DOF state vector `[Latitude, Longitude, Velocity (vx), Yaw (psi), Gyro Bias (b_psi)]`. 
-- **Prediction**: Runs continuously at 50Hz, integrating yaw rate and forward acceleration.
-- **Measurement Update**: Corrects drift when GNSS fixes are available at 1Hz using a complementary gain architecture.
-- **Non-Holonomic Constraints (NHC)**: During GNSS denial, lateral velocity is strictly constrained to 0, completely eliminating the infamous sideways drift common in dead reckoning.
-- **Zero-Velocity Update (ZUPT)**: If the AI network predicts velocity < 0.2 m/s, the filter clamps the speed to 0.0 and aggressively halts all heading integration to prevent standstill rotation drift.
-
-### 3. Offline Map Matching
-To guarantee <10% drift during extended urban canyon/tunnel blackouts, `MapMatcher` ingests a raw GeoJSON file (`sample_road_network.json`) into memory.
-- During outages, if the vehicle's heading is parallel to a known road segment (within 45 degrees), the estimated coordinates are strictly snapped onto the road polyline geometry.
-
----
-
-## Phase 4: Scenario Replay & 200 Hz Edge Engine
-
-### 1. Flutter Scenario Playback Engine
-To facilitate interactive judging and demonstrations without driving the vehicle, SensePath includes a live scenario replay system (`ScenarioPlayer`).
-- **Data Source**: Pre-packaged JSON datasets in `assets/scenarios/` (e.g., `tunnel_blackout_scenario.json`) simulate 6-axis IMU strings, GPS fixes, and GNSS-denial flags.
-- **Execution**: Tapping "Load Preset Scenario" in the `HackathonControls` FAB streams this JSON payload into the `DeadReckoningEngine` isolate at 10Hz. 
-- **Validation**: During the playback, a dual-line trajectory tracks both the Ground Truth GPS (Green Line) against the AI Dead Reckoning estimate (Orange Line). The `TelemetryHud` displays real-time `Drift` metrics in meters using Haversine distance, ensuring visually verifiable <10% cumulative drift constraints.
-
-### 2. Standalone Edge Deployable Engine (FOG IMU)
-To meet the ISRO constraints for high-precision, external edge node processing (such as a Raspberry Pi or Nvidia Jetson wired to a Fiber Optic Gyroscope), the system features a headless Python service inside `edge_engine/`.
-- **FOG Streamer**: Simulates a high-rate 200 Hz external IMU feed.
-- **Asynchronous ES-EKF Fusion**: A highly optimized version of the filter decodes the 200 Hz feed, performing state prediction at 200 Hz, while asynchronously decimating the input to 100Hz 1-second rolling windows to query the ONNX AI model natively via `CPUExecutionProvider`.
-- **WebSocket Streaming**: Exposes a real-time `/ws/telemetry` WebSocket broadcasting 5-DOF Position-Velocity-Attitude (PVA) states.
-- **Usage**:
-  ```bash
-  cd edge_engine
-  ./run_edge.sh
-  ```
-  Check the performance via `curl http://localhost:8080/health`.
-
----
-
-## Phase 5: Demonstration Suite, Edge Sync & ISRO Benchmark Verification
-
-### 1. Flutter Dual-Source Telemetry Sync
-The mobile application features a runtime toggle allowing judges to switch the active navigation telemetry source:
-- **Mode A (Smartphone 10 Hz)**: Completely edge-independent, running inference on the local device SoC.
-- **Mode B (Edge FOG 200 Hz)**: Bypasses the local sensor engine. Instead, a Dart `WebSocketChannel` connects to the Edge Engine (`ws://localhost:8080/ws/telemetry`) and consumes external PVA state data seamlessly plotting it onto the flutter UI Map.
-
-### 2. Automated ISRO Benchmark Suite
-The project evaluates IO-VNBD dataset compliance through `ml_pipeline/benchmark_suite.py`.
-- Computes along-track drift for simulated 50 m / 1000 m outages from real model inference (speed only; heading error excluded).
-- Compares against hold-last-speed and constant-speed baselines.
-- Writes `benchmark_report.json` and `benchmark.png`; requires `--rate_hz` because the prepared CSVs carry no timestamps.
-
-### 3. Live Web Dashboard
-For headless edge systems, the python backend serves a live UI telemetry dashboard at `http://localhost:8080/dashboard`.
-- Uses `Leaflet.js` mapped directly to the `WebSocket` broadcast.
-- Provides a desktop-scale presentation layer perfect for the jury to monitor real-time AI dead reckoning logic alongside the mobile client!
-
----
-
-## Phase 6: Production Hardening, Offline Bundling & Unified Demo Launcher
-
-### 1. Offline Map Tile Bundling & Fallbacks
-To protect against convention hall dead-zones during the hackathon, SensePath utilizes local tile bundling.
-- We configured a `FallbackGridTileProvider` in flutter_map. 
-- It attempts to load `assets/tiles/{z}/{x}/{y}.png` directly from the local bundle.
-- If an arbitrary coordinate is requested outside the bundled region, it gracefully degrades to a custom `Canvas`-generated grid overlay with coordinate ticks, preventing gray screens of death during judging.
-
-### 2. Adaptive Thermal Guard
-Protracted testing during judging rounds can cause SoC thermal throttling, slowing down ONNX execution.
-- `ThermalGuard` continuously monitors the latency of `OrtSession.run`.
-- If latency spikes above 80ms for 5 consecutive frames, the system smoothly halves the inference rate (from 10Hz to 5Hz), allowing the CPU to cool without dropping the 60FPS Flutter UI thread.
-
-### 3. Unified Demonstration Runner
-We've bundled a `run_demo.sh` script to streamline presentation setup.
-- Executes `launch_demo.py` which validates environment dependencies.
-- Boots the FastAPI Edge Engine.
-- Spawns the Jury Dashboard in your default browser.
-- Displays a colorful terminal readout indicating WebSocket health, providing a turn-key experience for the final SIH pitch! (See `JURY_DEMO_GUIDE.md` for the presentation script).
+1. **Not validated on a phone or a real drive.** Phone sensor conventions (axes, gravity in the
+   accelerometer stream, GNSS accuracy/heading) are handled by calibration, but must be checked in a car.
+2. **Meets the drift target only part of the time** (53 % of 1 km outages within 10 %); position error is
+   dominated by heading.
+3. **Heading:** gyro-only; no magnetometer or map-based correction. The best next step is heading aiding
+   (magnetometer + road-heading constraint) and a real HMM map matcher.
+4. **Data quality:** unsynchronised S/V files, only three training runs, one held-out driver. More runs
+   and a phone-recorded set would help most.
+5. Calibration needs ~40 s of GNSS driving; the phone's real GNSS latency is not modelled.
+6. Edge engine uses a replay, not a physical FOG; no C++ port.
+7. The earlier presentation mentions TFLite, PostgreSQL and a CNN-GRU speed regressor: the shipped system
+   uses ONNX, no database, and the recurrent speed integrator above.
