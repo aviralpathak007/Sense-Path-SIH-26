@@ -1,0 +1,86 @@
+{
+  "model": "dr_net.pt",
+  "test_runs": [
+    "A_S1",
+    "A_S2"
+  ],
+  "note": "heading for 2D error is ground-truth heading; along-track drift is the speed-only metric",
+  "outages": {
+    "50m": {
+      "drnet": {
+        "n_outages": 740,
+        "drift_pct_median": 7.71,
+        "drift_pct_mean": 16.97,
+        "drift_pct_p95": 64.61,
+        "frac_within_10pct": 0.562,
+        "pos_err_m_median": 4.1,
+        "pos_err_m_p95": 30.2
+      },
+      "hold": {
+        "n_outages": 740,
+        "drift_pct_median": 8.41,
+        "drift_pct_mean": 20.84,
+        "drift_pct_p95": 91.82,
+        "frac_within_10pct": 0.558,
+        "pos_err_m_median": 4.4,
+        "pos_err_m_p95": 34.0
+      },
+      "integ": {
+        "n_outages": 740,
+        "drift_pct_median": 10.96,
+        "drift_pct_mean": 26.26,
+        "drift_pct_p95": 112.32,
+        "frac_within_10pct": 0.482,
+        "pos_err_m_median": 5.8,
+        "pos_err_m_p95": 38.5
+      },
+      "oracle": {
+        "n_outages": 740,
+        "drift_pct_median": 0.0,
+        "drift_pct_mean": 0.0,
+        "drift_pct_p95": 0.0,
+        "frac_within_10pct": 1.0,
+        "pos_err_m_median": 0.3,
+        "pos_err_m_p95": 0.9
+      }
+    },
+    "1000m": {
+      "drnet": {
+        "n_outages": 482,
+        "drift_pct_median": 12.85,
+        "drift_pct_mean": 15.78,
+        "drift_pct_p95": 38.61,
+        "frac_within_10pct": 0.402,
+        "pos_err_m_median": 119.0,
+        "pos_err_m_p95": 338.7
+      },
+      "hold": {
+        "n_outages": 482,
+        "drift_pct_median": 24.8,
+        "drift_pct_mean": 30.78,
+        "drift_pct_p95": 76.79,
+        "frac_within_10pct": 0.224,
+        "pos_err_m_median": 197.3,
+        "pos_err_m_p95": 609.6
+      },
+      "integ": {
+        "n_outages": 482,
+        "drift_pct_median": 27.54,
+        "drift_pct_mean": 35.06,
+        "drift_pct_p95": 86.82,
+        "frac_within_10pct": 0.183,
+        "pos_err_m_median": 229.5,
+        "pos_err_m_p95": 681.0
+      },
+      "oracle": {
+        "n_outages": 482,
+        "drift_pct_median": 0.0,
+        "drift_pct_mean": 0.0,
+        "drift_pct_p95": 0.0,
+        "frac_within_10pct": 1.0,
+        "pos_err_m_median": 3.0,
+        "pos_err_m_p95": 8.9
+      }
+    }
+  }
+}
