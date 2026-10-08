@@ -8,23 +8,47 @@ This documentation serves as a comprehensive guide to the architecture, state ma
 
 ## Table of Contents
 
-1. [Architecture & Patterns](#architecture--patterns)
-2. [Core Components](#core-components)
+1. [Tech Stack & Technologies Used](#tech-stack--technologies-used)
+2. [Architecture & Patterns](#architecture--patterns)
+3. [Core Components](#core-components)
     - [State Management (Riverpod)](#state-management-riverpod)
     - [Background Processing (Dart Isolates)](#background-processing-dart-isolates)
     - [Sensor Integration](#sensor-integration)
-3. [User Interface (UI)](#user-interface-ui)
+4. [User Interface (UI)](#user-interface-ui)
     - [Navigation Map](#navigation-map)
     - [Heads-Up Display (HUD)](#heads-up-display-hud)
     - [Hackathon Demo Controls](#hackathon-demo-controls)
-4. [File Structure Overview](#file-structure-overview)
-5. [Phase 2: ML Pipeline & Kinematics Engine](#phase-2-ml-pipeline--kinematics-engine)
+5. [File Structure Overview](#file-structure-overview)
+6. [Phase 2: ML Pipeline & Kinematics Engine](#phase-2-ml-pipeline--kinematics-engine)
     - [Dataset Preprocessing (IO-VNBD)](#dataset-preprocessing-io-vnbd)
     - [CNN-GRU Architecture](#cnn-gru-architecture)
     - [Benchmarks & Evaluation](#benchmarks--evaluation)
     - [Training & Export Instructions](#training--export-instructions)
 
 ---
+
+## Tech Stack & Technologies Used
+
+SensePath leverages a polyglot architecture combining edge AI, mobile frontend, and high-performance backend microservices.
+
+**Frontend (Mobile & Web)**
+- **Flutter & Dart**: The core mobile application, utilizing the `flutter_map` library for vector/raster tile rendering and `latlong2` for geospatial math.
+- **Riverpod**: Robust reactive state management driving the `KinematicsState`.
+- **Leaflet.js & HTML/CSS**: Powers the headless edge server's Live Jury Dashboard, served natively to any browser.
+
+**Artificial Intelligence & Edge Compute**
+- **PyTorch**: Used in `ml_pipeline/` to define, train, and benchmark the `KinematicVelocityNet` (1D CNN + BiGRU).
+- **ONNX (Open Neural Network Exchange)**: The PyTorch model is exported to `.onnx` to bypass Apple Silicon compilation deadlocks.
+- **onnxruntime (Flutter binding)**: Natively executes the AI inference entirely on-device (via `CPUExecutionProvider`) inside a Dart background isolate.
+
+**Backend & Telemetry (Phase 4/5 Edge Engine)**
+- **Python 3.9+**: Powers the external 200 Hz Edge Engine (`edge_engine/`).
+- **FastAPI & Uvicorn**: Serves both the static HTML dashboard and the high-speed WebSockets for telemetry synchronization.
+- **WebSockets (`web_socket_channel`)**: Streams 5-DOF Position-Velocity-Attitude (PVA) state vectors from the Edge Engine directly into the Flutter app seamlessly.
+
+---
+
+
 
 ## Architecture & Patterns
 
@@ -250,3 +274,25 @@ The project evaluates IO-VNBD dataset compliance through `ml_pipeline/benchmark_
 For headless edge systems, the python backend serves a live UI telemetry dashboard at `http://localhost:8080/dashboard`.
 - Uses `Leaflet.js` mapped directly to the `WebSocket` broadcast.
 - Provides a desktop-scale presentation layer perfect for the jury to monitor real-time AI dead reckoning logic alongside the mobile client!
+
+---
+
+## Phase 6: Production Hardening, Offline Bundling & Unified Demo Launcher
+
+### 1. Offline Map Tile Bundling & Fallbacks
+To protect against convention hall dead-zones during the hackathon, SensePath utilizes local tile bundling.
+- We configured a `FallbackGridTileProvider` in flutter_map. 
+- It attempts to load `assets/tiles/{z}/{x}/{y}.png` directly from the local bundle.
+- If an arbitrary coordinate is requested outside the bundled region, it gracefully degrades to a custom `Canvas`-generated grid overlay with coordinate ticks, preventing gray screens of death during judging.
+
+### 2. Adaptive Thermal Guard
+Protracted testing during judging rounds can cause SoC thermal throttling, slowing down ONNX execution.
+- `ThermalGuard` continuously monitors the latency of `OrtSession.run`.
+- If latency spikes above 80ms for 5 consecutive frames, the system smoothly halves the inference rate (from 10Hz to 5Hz), allowing the CPU to cool without dropping the 60FPS Flutter UI thread.
+
+### 3. Unified Demonstration Runner
+We've bundled a `run_demo.sh` script to streamline presentation setup.
+- Executes `launch_demo.py` which validates environment dependencies.
+- Boots the FastAPI Edge Engine.
+- Spawns the Jury Dashboard in your default browser.
+- Displays a colorful terminal readout indicating WebSocket health, providing a turn-key experience for the final SIH pitch! (See `JURY_DEMO_GUIDE.md` for the presentation script).

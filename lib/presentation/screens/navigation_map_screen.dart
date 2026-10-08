@@ -6,6 +6,7 @@ import '../../data/models/kinematics.dart';
 import '../widgets/custom_puck.dart';
 import '../widgets/hud_overlay.dart';
 import '../widgets/hackathon_controls.dart';
+import '../widgets/fallback_grid_tile_provider.dart';
 
 class NavigationMapScreen extends ConsumerStatefulWidget {
   const NavigationMapScreen({super.key});
@@ -40,8 +41,8 @@ class _NavigationMapScreenState extends ConsumerState<NavigationMapScreen> {
             ),
             children: [
               TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.example.sense_path',
+                urlTemplate: 'assets/tiles/{z}/{x}/{y}.png',
+                tileProvider: FallbackGridTileProvider(),
               ),
               PolylineLayer(
                 polylines: [

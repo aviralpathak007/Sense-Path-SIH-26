@@ -8,6 +8,7 @@ import 'alignment_calibrator.dart';
 import 'kalman_filter.dart';
 import 'map_matcher.dart';
 import 'onnx_runner.dart';
+import 'thermal_guard.dart';
 
 // Messages for isolate
 class InitEngineMsg {
@@ -106,6 +107,7 @@ class DeadReckoningEngine {
     final kf = KalmanFilter();
     final mapMatcher = MapMatcher();
     final aiEstimator = OnnxVelocityEstimator();
+    final thermalGuard = ThermalGuard();
     
     await mapMatcher.loadMap('assets/maps/sample_road_network.json');
     await aiEstimator.init();
@@ -116,6 +118,7 @@ class DeadReckoningEngine {
     
     int lastTime = DateTime.now().millisecondsSinceEpoch;
     int lastGpsTime = DateTime.now().millisecondsSinceEpoch;
+    int frameCount = 0;
 
     // AI sliding window (6 channels, 100 samples)
     List<double> imuWindow = [];
@@ -180,9 +183,25 @@ class DeadReckoningEngine {
           if (isOutage) {
             // 3. AI Dead Reckoning Update & NHC Constraint
             if (imuWindow.length == 600) {
-              Float32List tensorData = Float32List.fromList(imuWindow);
-              double aiVelocity = aiEstimator.estimateVelocity(tensorData);
-              kf.updateAI(aiVelocity);
+              frameCount++;
+              bool shouldRun = true;
+              
+              if (thermalGuard.shouldThrottle()) {
+                // Throttle to 5 Hz (skip every other frame)
+                shouldRun = frameCount % 2 == 0;
+              }
+
+              if (shouldRun) {
+                Float32List tensorData = Float32List.fromList(imuWindow);
+                int infStart = DateTime.now().millisecondsSinceEpoch;
+                
+                double aiVelocity = aiEstimator.estimateVelocity(tensorData);
+                
+                int infEnd = DateTime.now().millisecondsSinceEpoch;
+                thermalGuard.logInferenceLatency(infEnd - infStart);
+                
+                kf.updateAI(aiVelocity);
+              }
             }
 
             // 4. Offline Map Matching Snapping
