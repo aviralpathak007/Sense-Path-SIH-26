@@ -9,7 +9,8 @@ runs the same core on an external IMU stream.
 > scenario replay, real OSM roads), and the learned model clearly beats naive dead reckoning on drivers
 > it never saw. It does **not** yet meet the PS target of <10 % drift reliably (about half of 1 km outages
 > land within 10 %), position error is dominated by gyro heading drift, and nothing has yet been tested
-> on a phone in a moving vehicle. Section 7 lists every limitation.
+> on a phone in a moving vehicle. Section 7 records what has been done, section 8 lists every limitation,
+> and section 9 ("Our future Explorations") lays out what comes next.
 
 ## 1. Architecture
 
@@ -148,17 +149,195 @@ construct `EdgeFusionEngine(average=True)` (box-averages 20 samples into each AI
 Run: `cd edge_engine && ./run_edge.sh`, then `/health`, `/dashboard`, `ws://HOST:8080/ws/telemetry?speed=N`.
 `/health` reports measured rate and latency (measured over a local WebSocket: see `achieved_hz`).
 
-## 7. Limitations and next steps
+## 7. Work completed to date
+
+This section records everything done on the project so far, including what was found wrong in the
+earlier version of the repo and fixed. Commit hashes refer to `git log`.
+
+### 7.1 Audit of the inherited prototype (what we found and corrected)
+
+| Finding in the earlier version | What we did |
+|---|---|
+| Benchmark report and plots were hard-coded (1.4 m, 42.5 m, 120 ms; `np.sin` + noise figure) and the jury guide called them verified | Deleted the fabricated report/figure; rewrote the benchmark so every number comes from running the model; removed the unsupported claims from the docs and jury guide (`3632be9e`) |
+| The shipped CNN-GRU was no better than a constant speed on the test set (RMSE 6.6 vs 6.2 m/s, output std 0.04 m/s, correlation -0.45) | Replaced it with a model trained and evaluated properly (section 3-4) |
+| Training assumed 100 Hz and per-file z-score normalisation; the app/edge fed raw values into the model | Established that the data is 10 Hz; moved to fixed feature scales shared by training, the Python core and the Dart core, with a parity test |
+| Phone and vehicle records in IO-VNBD are time-shifted (up to ~30 s) | Per-run lag estimated on the IMU and applied before training/evaluation |
+| Alignment calibrator hard-coded the forward axis and divided by ~0 gravity (NaN) because it was fed gravity-free acceleration | Replaced by gravity-aligned decomposition on accelerometer-with-gravity plus a forward-axis calibrator learned from GNSS speed changes |
+| Dataset gyro axes are not in the accelerometer frame, so "gyro about gravity" had no correlation with heading | Added a yaw-axis calibrator that regresses GNSS bearing change onto the gyro; end-to-end position error on the demo outage fell from about 50 % to 14 % of distance driven |
+| "ES-EKF" was a fixed-gain blend with no covariance | Renamed honestly (complementary-filter style loop); true covariance EKF is on the roadmap |
+| App did not compile (`DiagnosticsProperty`), tile paths and HUD strings contained literal `\${...}`, `assets/tiles/` was missing, template widget test was stale | Fixed all of these; `flutter analyze` reports no issues |
+| Engine isolate called `rootBundle` (does not exist in a background isolate), so the model could never load | Assets are read on the main isolate and passed to the engine; confirmed by running the app (found by the autoplay check, section 5) |
+| HUD "Drift" was just distance from outage start | Now error against a reference path when one exists, otherwise distance driven |
+| Scenario was 3 frames with constant fake IMU; map was one 3-point road in California | Replaced by a 6-minute held-out drive (3,600 frames of real phone IMU) and 838 real OSM ways around the drive |
+| Edge engine streamed random Gaussian noise from lat/lon (0, 0) with no calibration, outage logic or GNSS | Rebuilt on the shared core, replaying real data (section 6) |
+| PPT said TFLite / PostgreSQL / CNN-GRU speed regressor | Documented the differences (section 8, item 7) |
+
+### 7.2 Data and machine learning
+
+* `ml_pipeline/prepare_runs.py`: downloads IO-VNBD runs (Git LFS) and merges phone and vehicle files,
+  keeping raw accelerometer with gravity, gyro, ground-truth speed, heading and position.
+* Data investigation: confirmed 10 Hz sampling; measured the S/V time offset per run; found the gyro-frame
+  mismatch; excluded runs that could not be aligned; chose a driver-level split (train B/E, validate E,
+  test Driver A).
+* `ml_pipeline/features.py`, `ml_pipeline/runs.py`: IMU-lag alignment, causal calibration of the forward and
+  yaw axes over each run, mount-invariant features.
+* `ml_pipeline/dr_net.py`, `train_dr.py`: recurrent speed integrator trained end to end on 30 s outage-like
+  sequences, with forward-axis error and bias augmentation. Two longer-sequence/larger-hidden variants were
+  tried and rejected on validation.
+* `ml_pipeline/export_dr_onnx.py`: single-step ONNX export (20 KB), parity checked against PyTorch over 300
+  chained steps.
+* `ml_pipeline/benchmark_suite.py`: simulated GNSS outages at every start point on held-out runs; baselines
+  (hold last speed, accelerometer integration, oracle speed); along-track drift and 2D position error with
+  true and gyro heading; boxplots and an example path. Ablations were run (section 4).
+* Removed the superseded pipeline files (old dataset loader, model, training, evaluate and export scripts).
+
+### 7.3 Streaming core and cross-language verification
+
+* `edge_engine/idr_core.py`, `idr_nav.py`: streaming feature extraction, the two GNSS-driven calibrators,
+  DRNet stepper (injectable), GNSS/dead-reckoning mode switching, heading and position propagation.
+* `lib/domain/dr_engine/idr_core.dart`, `idr_nav.dart`: line-for-line Dart port.
+* `tests/test_parity.py`: streaming vs vectorised features, exact match. `tests/make_golden.py` +
+  `test/idr_core_test.dart`: Dart output equals Python over 2,200 frames (position, heading, speed, mode,
+  both calibrated axes).
+
+### 7.4 Application
+
+* Engine isolate rebuilt: 50 Hz sensors averaged to 10 Hz, GNSS accuracy gating, virtual 10 Hz clock
+  (replay speed does not change results), manual outage switch, recalibrate and reset messages.
+* `sensor_service.dart` switched to accelerometer-with-gravity; `onnx_runner.dart` runs one GRU step per tick.
+* Scenario replay of a held-out drive with a 90 s GNSS outage (`scripts/make_scenario.py`; the window was
+  chosen by a fixed rule, not by model output), bundled OSM roads, reference path, error HUD, calibration
+  status, and 1x/5x playback.
+* Verification: `flutter analyze` clean; `flutter test` passes; macOS debug build succeeds; headless
+  autoplay (`--dart-define=AUTOPLAY_SCENARIO=true`) exercised the real ONNX model in the engine isolate and
+  reported about 70 m error after ~600 m of dead reckoning.
+* Removed obsolete code (old calibrator, Kalman filter, thermal guard, old model and scenario assets).
+
+### 7.5 Edge engine
+
+* Replay source (held-out drive interpolated 10 -> 200 Hz), high-rate (200 Hz) propagation layer between
+  10 Hz AI steps, decimate vs box-average modes, per-client sessions with replay speed control.
+* FastAPI/WebSocket server; pacing fixed to fixed deadlines so it holds **200.1 msg/s** measured over a real
+  WebSocket; `/health` reports achieved rate and latency; dashboard shows mode, error vs reference and
+  reference path; launcher text corrected.
+* Offline throughput measured (~0.04 ms per AI step) and the replay reproduces the 10 Hz result (91 m /
+  14 %) exactly.
+
+### 7.6 Documentation and honesty pass
+
+* README, this document and the jury guide rewritten around measured results and stated limitations;
+  `IO-VNBD-master/` and trial checkpoints are git-ignored.
+
+### 7.7 Commit history
+
+| Commit | Content |
+|---|---|
+| `3632be9e` | Phase 0: removed fabricated benchmark numbers and claims; first honest benchmark |
+| `35ba1229` | Recurrent dead-reckoning model, 10 Hz features, held-out-driver benchmark, ONNX export |
+| `3a5d3cad` | Streaming core and deployable forward-axis benchmark |
+| `a49f5dae` | Yaw-axis calibration from GNSS, retrain, held-out demo scenario and OSM roads |
+| `6614d410` | Dart port, rebuilt engine/edge engine/app, tests, build and UI fixes |
+| `67edbbe9` | Documentation rewritten from measured results |
+| `3b6d6051` | Edge server pacing at 200 Hz, corrected ablation numbers |
+
+## 8. Limitations
 
 1. **Not validated on a phone or a real drive.** Phone sensor conventions (axes, gravity in the
    accelerometer stream, GNSS accuracy/heading) are handled by calibration, but must be checked in a car.
 2. **Meets the drift target only part of the time** (53 % of 1 km outages within 10 %); position error is
    dominated by heading.
-3. **Heading:** gyro-only; no magnetometer or map-based correction. The best next step is heading aiding
-   (magnetometer + road-heading constraint) and a real HMM map matcher.
+3. **Heading:** gyro-only; no magnetometer or map-based correction (see section 9).
 4. **Data quality:** unsynchronised S/V files, only three training runs, one held-out driver. More runs
    and a phone-recorded set would help most.
 5. Calibration needs ~40 s of GNSS driving; the phone's real GNSS latency is not modelled.
 6. Edge engine uses a replay, not a physical FOG; no C++ port.
 7. The earlier presentation mentions TFLite, PostgreSQL and a CNN-GRU speed regressor: the shipped system
    uses ONNX, no database, and the recurrent speed integrator above.
+
+## 9. Our future Explorations
+
+Ordered by how much each item changes whether the system does what PS 26168 describes. "Done when" says
+how we would know.
+
+### 9.1 Validate on a real phone in a real vehicle (blocking)
+
+* Today everything is verified on IO-VNBD replay and on macOS; no phone has run it. Unverified: axis and
+  gravity conventions of the real accelerometer/gyro streams, GNSS heading and accuracy fields, 50 -> 10 Hz
+  averaging behaviour, the phone's own GNSS latency.
+* Do one drive with GNSS on followed by a forced outage; log raw IMU + GNSS to a file; keep it as a test
+  set and later as phone-native training data. Include a two-wheeler and a re-mounted phone if possible.
+* *Done when:* a recorded real outage is replayed through the app and reported with the same benchmark.
+
+### 9.2 Heading: the largest remaining error
+
+* With the true speed, gyro heading alone still gives ~227 m median error on 1 km outages.
+* Add gyro-bias estimation beyond the stationary update; magnetometer as a weak heading aid (the PPT lists
+  it and it is unused); road-heading constraint; learn a heading-rate correction the way speed is learned.
+* *Done when:* median 1 km position error with gyro heading is within ~2x the true-heading figure.
+
+### 9.3 Real GNSS+INS fusion: covariance EKF with AI-adaptive noise
+
+* Replace the complementary-filter loop with an error-state EKF (position, velocity, heading, gyro bias with
+  covariance), NHC and ZUPT as measurement updates, and use the model's confidence to set measurement noise
+  (the AI-IMU idea cited in the PPT).
+* Smooth GNSS re-acquisition instead of overwriting position; measure outage-to-DR and DR-to-GNSS transition
+  latency (the PS asks for milliseconds); output a fixed 10 Hz in every mode.
+* *Done when:* transition latency is measured and reported, and the EKF beats the current loop on the same
+  benchmark.
+
+### 9.4 Reliably meet the 10 % drift target
+
+* Only 53 % of 1 km outages are within 10 % and p95 is 37 %.
+* More IO-VNBD runs with better alignment, phone-recorded data from 9.1, longer context, model uncertainty so
+  the system knows when it is not trustworthy, and tuning against a second held-out driver.
+* *Done when:* p95 drift on held-out drivers is near the target, not just the median.
+
+### 9.5 Real HMM map matching
+
+* Replace the disabled heading-gated snap with candidate-road HMM/Viterbi matching using road topology,
+  evaluated on the benchmark before it is switched on.
+* Scale the road store beyond a bundled GeoJSON (SQLite/SpatiaLite or MBTiles queried by bounding box).
+* *Done when:* map matching measurably lowers position error and is enabled by default.
+
+### 9.6 Generalise to unseen datasets
+
+* The PS says more datasets will be supplied at screening. Build a loader that accepts arbitrary CSV schemas
+  (column mapping, rate detection, lag alignment, gyro-frame detection) and runs the benchmark
+  automatically.
+* *Done when:* a new CSV with a different layout goes from file to report with no manual steps.
+
+### 9.7 Explicit vibration, pothole and mount-shift handling
+
+* Today vibration robustness is implicit (network) and mount changes are followed only by calibrator
+  forgetting. Add shock/pothole injection augmentation and tests, a mount-shift detector that raises
+  "recalibrating" in the UI, and a stationary-engine-vibration test.
+* *Done when:* performance under injected shocks and a simulated re-mount is reported.
+
+### 9.8 Mobile robustness
+
+* Keep dead reckoning running with the screen off (Android foreground service, iOS background modes),
+  review permissions and `Info.plist`, measure battery and thermals and re-introduce adaptive inference
+  throttling only if device timing shows it is needed, show a clear "calibrating, cannot dead-reckon yet"
+  state for the first ~40 s.
+* *Done when:* a 30-minute background run on a physical phone completes with acceptable battery and latency.
+
+### 9.9 Edge engine on a real external IMU
+
+* Add a serial/UDP adapter for a real 200 Hz IMU/FOG, validate the box-averaging mode on real data, measure
+  the accuracy benefit of high-rate heading with a low-noise gyro, and decide whether a C++ core is built or
+  the claim is dropped from the PPT.
+* *Done when:* a real external IMU stream is processed and reported.
+
+### 9.10 Data persistence (optional)
+
+* A SQLite trip/outage log on the phone (outage duration, distance, mode, calibration state) would give
+  field evidence and supports the fleet and emergency-response use cases. A PostgreSQL/PostGIS fleet
+  backend only makes sense if trips are uploaded; it is not needed for the problem statement. Until then
+  the system deliberately has no database.
+
+### 9.11 Submission materials
+
+* Update the PPT to the shipped stack (ONNX, no PostgreSQL unless 9.10 is built, recurrent speed integrator)
+  and to the measured results; produce a clean standalone position-plot figure from an IO-VNBD subset (a
+  required proposal artifact); record a backup demo video; keep the jury guide in sync with
+  `ml_pipeline/benchmark_report.json`.
