@@ -4,18 +4,19 @@
     "A_S1",
     "A_S2"
   ],
-  "forward_axis": "stream",
-  "note": "heading for 2D error is ground-truth heading; along-track drift is the speed-only metric",
+  "note": "pos_err = 2D error with ground-truth heading (speed-only evaluation); pos_err_gyro_heading = heading from the gyro (calibrated yaw axis) starting at the true heading",
   "outages": {
     "50m": {
       "drnet": {
         "n_outages": 740,
-        "drift_pct_median": 8.0,
-        "drift_pct_mean": 16.19,
-        "drift_pct_p95": 58.9,
-        "frac_within_10pct": 0.566,
-        "pos_err_m_median": 4.2,
-        "pos_err_m_p95": 26.1
+        "drift_pct_median": 7.36,
+        "drift_pct_mean": 14.4,
+        "drift_pct_p95": 53.11,
+        "frac_within_10pct": 0.599,
+        "pos_err_m_median": 3.8,
+        "pos_err_m_p95": 25.2,
+        "pos_err_gyro_heading_m_median": 4.6,
+        "pos_err_gyro_heading_m_p95": 28.4
       },
       "hold": {
         "n_outages": 740,
@@ -24,7 +25,9 @@
         "drift_pct_p95": 91.82,
         "frac_within_10pct": 0.558,
         "pos_err_m_median": 4.4,
-        "pos_err_m_p95": 34.0
+        "pos_err_m_p95": 34.0,
+        "pos_err_gyro_heading_m_median": 4.9,
+        "pos_err_gyro_heading_m_p95": 44.5
       },
       "integ": {
         "n_outages": 740,
@@ -33,7 +36,9 @@
         "drift_pct_p95": 114.6,
         "frac_within_10pct": 0.509,
         "pos_err_m_median": 4.8,
-        "pos_err_m_p95": 39.2
+        "pos_err_m_p95": 39.2,
+        "pos_err_gyro_heading_m_median": 5.7,
+        "pos_err_gyro_heading_m_p95": 52.2
       },
       "oracle": {
         "n_outages": 740,
@@ -42,18 +47,22 @@
         "drift_pct_p95": 0.0,
         "frac_within_10pct": 1.0,
         "pos_err_m_median": 0.3,
-        "pos_err_m_p95": 0.9
+        "pos_err_m_p95": 0.9,
+        "pos_err_gyro_heading_m_median": 1.3,
+        "pos_err_gyro_heading_m_p95": 6.4
       }
     },
     "1000m": {
       "drnet": {
         "n_outages": 482,
-        "drift_pct_median": 11.9,
-        "drift_pct_mean": 15.18,
-        "drift_pct_p95": 40.02,
-        "frac_within_10pct": 0.407,
-        "pos_err_m_median": 114.4,
-        "pos_err_m_p95": 315.6
+        "drift_pct_median": 9.36,
+        "drift_pct_mean": 12.71,
+        "drift_pct_p95": 36.57,
+        "frac_within_10pct": 0.529,
+        "pos_err_m_median": 101.7,
+        "pos_err_m_p95": 316.4,
+        "pos_err_gyro_heading_m_median": 279.3,
+        "pos_err_gyro_heading_m_p95": 499.7
       },
       "hold": {
         "n_outages": 482,
@@ -62,7 +71,9 @@
         "drift_pct_p95": 76.79,
         "frac_within_10pct": 0.224,
         "pos_err_m_median": 197.3,
-        "pos_err_m_p95": 609.6
+        "pos_err_m_p95": 609.6,
+        "pos_err_gyro_heading_m_median": 330.4,
+        "pos_err_gyro_heading_m_p95": 716.2
       },
       "integ": {
         "n_outages": 482,
@@ -71,7 +82,9 @@
         "drift_pct_p95": 86.53,
         "frac_within_10pct": 0.224,
         "pos_err_m_median": 208.2,
-        "pos_err_m_p95": 645.6
+        "pos_err_m_p95": 645.6,
+        "pos_err_gyro_heading_m_median": 336.6,
+        "pos_err_gyro_heading_m_p95": 781.5
       },
       "oracle": {
         "n_outages": 482,
@@ -80,7 +93,9 @@
         "drift_pct_p95": 0.0,
         "frac_within_10pct": 1.0,
         "pos_err_m_median": 3.0,
-        "pos_err_m_p95": 8.9
+        "pos_err_m_p95": 8.9,
+        "pos_err_gyro_heading_m_median": 226.8,
+        "pos_err_gyro_heading_m_p95": 464.0
       }
     }
   }

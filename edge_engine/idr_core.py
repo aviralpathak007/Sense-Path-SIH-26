@@ -22,14 +22,14 @@ SCALES = np.array([A_SCALE, A_SCALE, A_SCALE, W_SCALE, W_SCALE], dtype=np.float6
 
 
 class FeatureStream:
-    """Per-sample gravity-aligned decomposition. Output angles are relative to the e1/e2 basis."""
+    """Per-sample gravity-aligned accelerometer decomposition (angles relative to the e1/e2 basis)."""
 
     def __init__(self):
         self.g = None
 
-    def update(self, acc, gyro):
+    def update(self, acc):
+        """Returns (a1, a2, a_v, g_hat): horizontal accel along e1/e2, vertical accel minus g, up unit vector."""
         acc = np.asarray(acc, dtype=np.float64)
-        gyro = np.asarray(gyro, dtype=np.float64)
         self.g = acc.copy() if self.g is None else (1 - GRAV_ALPHA) * self.g + GRAV_ALPHA * acc
         g_norm = float(np.linalg.norm(self.g))
         g_hat = self.g / g_norm
@@ -37,16 +37,24 @@ class FeatureStream:
         e1 = ref - (ref @ g_hat) * g_hat
         e1 /= np.linalg.norm(e1)
         e2 = np.cross(g_hat, e1)
-        a1, a2 = float(acc @ e1), float(acc @ e2)
-        a_v = float(acc @ g_hat) - g_norm
-        w_up = float(gyro @ g_hat)
-        w_h = float(np.linalg.norm(gyro - w_up * g_hat))
-        return a1, a2, a_v, w_up, w_h
+        return float(acc @ e1), float(acc @ e2), float(acc @ g_hat) - g_norm, g_hat
 
-    @staticmethod
-    def vehicle(a1, a2, a_v, w_up, w_h, theta):
-        c, s = np.cos(theta), np.sin(theta)
-        return np.array([c * a1 + s * a2, -s * a1 + c * a2, a_v, w_up, w_h])
+
+def yaw_features(gyro, u, g_hat):
+    """(heading_rate, w_h). u is the calibrated gyro->heading-rate vector; default is -g_hat
+    (Android gyro is counter-clockwise positive about up, compass heading is clockwise)."""
+    gyro = np.asarray(gyro, dtype=np.float64)
+    u = -g_hat if u is None else np.asarray(u, dtype=np.float64)
+    k = float(np.linalg.norm(u))
+    uh = u / k
+    p = float(gyro @ uh)
+    return k * p, float(np.linalg.norm(gyro - p * uh))
+
+
+def vehicle_features(a1, a2, a_v, gyro, g_hat, theta, u):
+    c, s = np.cos(theta), np.sin(theta)
+    w, w_h = yaw_features(gyro, u, g_hat)
+    return np.array([c * a1 + s * a2, -s * a1 + c * a2, a_v, w, w_h])
 
 
 class ForwardAxisCalibrator:
@@ -92,6 +100,45 @@ class ForwardAxisCalibrator:
         self.reset_interval()
 
 
+class YawAxisCalibrator:
+    """Learns the gyro -> compass-heading-rate vector by regressing GNSS bearing change onto the gyro.
+
+    Independent of how the phone is mounted (and of the sensor-frame conventions of the source).
+    """
+
+    def __init__(self, forget=0.995, min_fixes=40, min_speed=3.0):
+        self.forget, self.min_fixes, self.min_speed = forget, min_fixes, min_speed
+        self.xtx = np.zeros((3, 3))
+        self.xty = np.zeros(3)
+        self.n = 0
+        self.sum = np.zeros(3)
+        self.cnt = 0
+        self.prev = None          # (bearing_rad, t)
+        self.u = None
+
+    def on_imu(self, gyro):
+        self.sum += gyro
+        self.cnt += 1
+
+    def on_gnss(self, bearing_deg, speed, t):
+        b = np.radians(bearing_deg)
+        if self.prev is not None and self.cnt > 0 and t > self.prev[1] and speed > self.min_speed:
+            d = (b - self.prev[0] + np.pi) % (2 * np.pi) - np.pi
+            rate = d / (t - self.prev[1])
+            if abs(rate) < 1.0:
+                x = self.sum / self.cnt
+                self.xtx = self.forget * self.xtx + np.outer(x, x)
+                self.xty = self.forget * self.xty + x * rate
+                self.n += 1
+                if self.n >= self.min_fixes:
+                    w = np.linalg.solve(self.xtx + 1e-6 * np.eye(3), self.xty)
+                    if 0.3 < np.linalg.norm(w) < 3.0:
+                        self.u = w
+        self.prev = (b, t)
+        self.sum[:] = 0
+        self.cnt = 0
+
+
 class OrtStep:
     """DRNet single step through onnxruntime; keeps v and h between calls."""
 
@@ -118,36 +165,38 @@ class IdrCore:
     def __init__(self, onnx_path):
         self.feat = FeatureStream()
         self.axis = ForwardAxisCalibrator()
+        self.yaw = YawAxisCalibrator()
         self.net = OrtStep(onnx_path)
         self.speed = 0.0
         self.gnss_speed = 0.0
         self.mode = "gnss"          # "gnss" | "dr"
-        self.t = 0.0
 
     @property
     def can_dead_reckon(self):
         return self.axis.theta is not None
 
-    def on_gnss(self, speed, t):
-        """Call for every GNSS fix while the signal is usable."""
+    def on_gnss(self, speed, t, bearing_deg=None):
+        """Call for every usable GNSS fix."""
         self.axis.on_gnss(speed, t)
+        if bearing_deg is not None:
+            self.yaw.on_gnss(bearing_deg, speed, t)
         self.gnss_speed = speed
         self.speed = speed
-        if self.mode == "dr":
-            self.mode = "gnss"       # seamless return: the next IMU step already follows GNSS
+        self.mode = "gnss"           # seamless return: the next IMU step already follows GNSS
 
     def start_outage(self):
         if self.mode != "dr":
             self.mode = "dr"
-            self.net.reset(self.gnss_speed if self.speed == 0 else self.speed)
+            self.net.reset(self.speed)
 
     def on_imu(self, acc, gyro):
-        """10 Hz IMU sample. Returns (speed, yaw_rate)."""
-        a1, a2, a_v, w_up, w_h = self.feat.update(acc, gyro)
+        """10 Hz IMU sample. Returns (speed m/s, heading rate rad/s clockwise)."""
+        gyro = np.asarray(gyro, dtype=np.float64)
+        a1, a2, a_v, g_hat = self.feat.update(acc)
         self.axis.on_imu(a1, a2)
-        if self.mode == "dr":
-            if self.can_dead_reckon:
-                f = FeatureStream.vehicle(a1, a2, a_v, w_up, w_h, self.axis.theta)
-                self.speed = self.net.step(f)
-            # without a calibrated axis we can only hold the last GNSS speed
-        return self.speed, w_up
+        self.yaw.on_imu(gyro)
+        if self.mode == "dr" and self.can_dead_reckon:
+            f = vehicle_features(a1, a2, a_v, gyro, g_hat, self.axis.theta, self.yaw.u)
+            self.speed = self.net.step(f)
+        # without a calibrated axis we can only hold the last GNSS speed
+        return self.speed, yaw_features(gyro, self.yaw.u, g_hat)[0]

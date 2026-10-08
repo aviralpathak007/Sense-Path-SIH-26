@@ -26,8 +26,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from dr_net import DRNet
-from features import DT, scale_features
-from runs import ROOT, TEST, load_run, rotate_features, streaming_axis
+from features import DT, W_SCALE, scale_features
+from runs import ROOT, TEST, load_run, outage_features
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUTAGES_M = (50, 1000)
@@ -40,32 +40,31 @@ def to_xy(lat, lon, lat0, lon0):
     return ((lon - lon0) * 111320.0 * np.cos(np.deg2rad(lat0)), (lat - lat0) * 110574.0)
 
 
-def run_features(run, s, tmax, axis):
-    if axis == "offline":
-        return run["feat"][s:s + tmax]
-    return rotate_features(run["base"][s:s + tmax], run["theta_t"][s])   # axis frozen at outage start
-
-
-def simulate(model, run, starts, tmax, axis):
+def simulate(model, run, starts, tmax):
     n = len(run["gt_speed"])
-    starts = [s for s in starts if s + tmax + 1 < n and (axis == "offline" or not np.isnan(run["theta_t"][s]))]
-    feats = np.stack([scale_features(run_features(run, s, tmax, axis)) for s in starts])
+    feats_l, ok = [], []
+    for s in starts:
+        f = outage_features(run, s, tmax) if s + tmax + 1 < n else None
+        if f is not None:
+            feats_l.append(scale_features(f))
+            ok.append(s)
+    starts, feats = ok, np.stack(feats_l)
     gt = np.stack([run["gt_speed"][s + 1:s + tmax + 1] for s in starts])
     v0 = np.array([[run["gt_speed"][s]] for s in starts])
     with torch.no_grad():
         v_net = model(torch.tensor(feats, dtype=torch.float32), torch.tensor(v0, dtype=torch.float32)).numpy()
     v_int = np.maximum(v0 + np.cumsum(feats[:, :, 0] * 3.0 * DT, 1), 0)
-    return starts, {"drnet": v_net, "hold": np.repeat(v0, tmax, 1), "integ": v_int, "oracle": gt}, gt
+    return starts, {"drnet": v_net, "hold": np.repeat(v0, tmax, 1), "integ": v_int, "oracle": gt}, gt, feats
 
 
-def evaluate(model, runs, length_m, axis):
+def evaluate(model, runs, length_m):
     tmax = TMAX[length_m]
-    res = {m: {"drift": [], "pos": []} for m in METHODS}
+    res = {m: {"drift": [], "pos": [], "pos_gyro": []} for m in METHODS}
     examples = None
     for run in runs:
         n = len(run["gt_speed"])
         starts = [s for s in range(1000, n - tmax - 2, 150) if run["gt_speed"][s] > 3.0]
-        starts, vel, gt = simulate(model, run, starts, tmax, axis)
+        starts, vel, gt, ft = simulate(model, run, starts, tmax)
         lat0, lon0 = run["gt_lat"], run["gt_lon"]
         xg, yg = to_xy(run["gt_lat"], run["gt_lon"], run["gt_lat"][0], run["gt_lon"][0])
         for i, s in enumerate(starts):
@@ -77,19 +76,23 @@ def evaluate(model, runs, length_m, axis):
             psi = np.deg2rad(run["gt_heading"][s + 1:s + 1 + e])
             if np.isnan(psi).any() or np.isnan(xg[s:s + e + 1]).any():
                 continue
+            psi_g = np.deg2rad(run["gt_heading"][s]) + np.cumsum(ft[i, :e, 3] * W_SCALE * DT)  # gyro heading
             for m in METHODS:
                 dist_err = abs(((vel[m][i, :e] - gt[i, :e]) * DT).sum())
                 res[m]["drift"].append(100.0 * dist_err / cum[hit])
                 px = xg[s] + (vel[m][i, :e] * DT * np.sin(psi)).sum()
                 py = yg[s] + (vel[m][i, :e] * DT * np.cos(psi)).sum()
                 res[m]["pos"].append(float(np.hypot(px - xg[s + e], py - yg[s + e])))
+                qx = xg[s] + (vel[m][i, :e] * DT * np.sin(psi_g)).sum()
+                qy = yg[s] + (vel[m][i, :e] * DT * np.cos(psi_g)).sum()
+                res[m]["pos_gyro"].append(float(np.hypot(qx - xg[s + e], qy - yg[s + e])))
             if examples is None and length_m == 1000 and cum[hit] > 900:
                 examples = (run["name"], s, e, psi, {m: vel[m][i, :e] for m in METHODS}, gt[i, :e], (xg, yg))
     return res, examples
 
 
-def stats(drift, pos):
-    d, p = np.array(drift), np.array(pos)
+def stats(drift, pos, pos_gyro):
+    d, p, q = np.array(drift), np.array(pos), np.array(pos_gyro)
     if len(d) == 0:
         return {"n_outages": 0}
     return {
@@ -100,6 +103,8 @@ def stats(drift, pos):
         "frac_within_10pct": round(float((d <= TARGET_PCT).mean()), 3),
         "pos_err_m_median": round(float(np.median(p)), 1),
         "pos_err_m_p95": round(float(np.percentile(p, 95)), 1),
+        "pos_err_gyro_heading_m_median": round(float(np.median(q)), 1),
+        "pos_err_gyro_heading_m_p95": round(float(np.percentile(q, 95)), 1),
     }
 
 
@@ -108,16 +113,13 @@ def main(a):
     model.load_state_dict(torch.load(a.model, map_location="cpu"))
     model.eval()
     runs = [load_run(n) for n in a.runs]
-    for r in runs:
-        r["theta_t"], r["base"] = streaming_axis(r)
     report = {"model": os.path.relpath(a.model, ROOT), "test_runs": a.runs,
-              "forward_axis": a.axis,
-              "note": "heading for 2D error is ground-truth heading; along-track drift is the speed-only metric",
+              "note": "pos_err = 2D error with ground-truth heading (speed-only evaluation); pos_err_gyro_heading = heading from the gyro (calibrated yaw axis) starting at the true heading",
               "outages": {}}
     box, example = {}, None
     for L in OUTAGES_M:
-        res, ex = evaluate(model, runs, L, a.axis)
-        report["outages"][f"{L}m"] = {m: stats(res[m]["drift"], res[m]["pos"]) for m in METHODS}
+        res, ex = evaluate(model, runs, L)
+        report["outages"][f"{L}m"] = {m: stats(res[m]["drift"], res[m]["pos"], res[m]["pos_gyro"]) for m in METHODS}
         box[L] = res
         example = example or ex
     os.makedirs(os.path.dirname(a.report), exist_ok=True)
@@ -159,8 +161,6 @@ def plot(a, box, example):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=os.path.join(ROOT, "dr_net.pt"))
-    ap.add_argument("--axis", choices=["stream", "offline"], default="stream",
-                    help="stream = calibrated causally from 1 Hz speed fixes (deployable); offline = oracle fit")
     ap.add_argument("--runs", nargs="+", default=TEST)
     ap.add_argument("--report", default=os.path.join(HERE, "benchmark_report.json"))
     ap.add_argument("--figure", default=os.path.join(HERE, "benchmark.png"))

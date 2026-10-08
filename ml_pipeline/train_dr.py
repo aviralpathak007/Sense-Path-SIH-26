@@ -11,7 +11,7 @@ import torch
 
 from dr_net import DRNet
 from features import DT, scale_features
-from runs import ROOT, TEST, TRAIN, VAL, load_run
+from runs import ROOT, TEST, TRAIN, VAL, load_run, outage_features
 
 CFG = {"seq": 300}
 SEQ = 300  # steps per training sequence (overridden by --seq)
@@ -21,10 +21,11 @@ def sample_batch(runs, batch, rng, aug=True):
     SEQ = CFG["seq"]
     xs, v0, ys = [], [], []
     for _ in range(batch):
-        r = runs[rng.integers(len(runs))]
-        n = len(r["gt_speed"])
-        s = int(rng.integers(0, n - SEQ - 1))
-        f = r["feat"][s:s + SEQ].copy()
+        f = None
+        while f is None:                       # only start where the axes were already calibrated
+            r = runs[rng.integers(len(runs))]
+            s = int(rng.integers(0, len(r["gt_speed"]) - SEQ - 1))
+            f = outage_features(r, s, SEQ)
         if aug:
             d = np.deg2rad(rng.uniform(-8, 8))           # forward-axis estimation error
             c, si = np.cos(d), np.sin(d)
@@ -46,7 +47,10 @@ def eval_chain(model, runs, seq=600, stride=600):
         for r in runs:
             g = r["gt_speed"]
             for s in range(1000, len(g) - seq - 1, stride):
-                x = torch.tensor(scale_features(r["feat"][s:s + seq]), dtype=torch.float32)[None]
+                f = outage_features(r, s, seq)
+                if f is None:
+                    continue
+                x = torch.tensor(scale_features(f), dtype=torch.float32)[None]
                 v = model(x, torch.tensor([[g[s]]], dtype=torch.float32))[0].numpy()
                 errs.append(np.abs(v - g[s + 1:s + seq + 1]).mean())
                 hold.append(np.abs(g[s] - g[s + 1:s + seq + 1]).mean())
