@@ -28,7 +28,6 @@ async def websocket_telemetry(websocket: WebSocket, speed: int = 1):
             engine = EdgeFusionEngine()
             i, sent, t_start = 0, 0, time.perf_counter()
             while i < source.n:
-                cycle_start = time.perf_counter()
                 state = None
                 for _ in range(speed):
                     if i >= source.n:
@@ -41,7 +40,8 @@ async def websocket_telemetry(websocket: WebSocket, speed: int = 1):
                     sent += 1
                     health.update(mode=state["mode"], status="streaming", **engine.stats(),
                                   achieved_hz=round(sent / max(time.perf_counter() - t_start, 1e-6), 1))
-                await asyncio.sleep(max(0.0, 1.0 / IMU_HZ - (time.perf_counter() - cycle_start)))
+                # fixed deadlines (not 'sleep the remainder') so scheduling overhead does not accumulate
+                await asyncio.sleep(max(0.0, t_start + (sent) / IMU_HZ - time.perf_counter()))
             await asyncio.sleep(3)
     except Exception as e:  # client disconnected
         print(f"Connection closed: {e}")

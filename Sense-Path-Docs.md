@@ -100,8 +100,9 @@ Reading it honestly:
 * On 1 km outages the model more than halves the drift of naive dead reckoning (9.4 % vs 25 %), and 53 % of
   outages are within the 10 % target, but p95 is 37 %.
 * On 50 m outages the gain is small (7.4 % vs 8.4 % median): short outages are dominated by noise.
-* Ablation (1 km): zeroing the accelerometer features raises median drift from 12 % to 46 %, zeroing all
-  features to ~98 %: the model really uses the IMU, not a speed prior.
+* Ablation (1 km, test set): zeroing the accelerometer features raises median drift from 9.4 % to 92 %,
+  zeroing the gyro features only to 11.8 %, zeroing everything to 98 %: the model really uses the IMU
+  (mostly the accelerometer), not a speed prior.
 * **Heading is the larger problem.** With the *true* speed and the gyro heading, the median 1 km position
   error is still 227 m. The target position error is not met.
 * The ISRO example target "<5 m over 50 m" corresponds to 10 %; our median is 7.4 % but ~40 % of outages exceed it.
@@ -145,7 +146,7 @@ construct `EdgeFusionEngine(average=True)` (box-averages 20 samples into each AI
 `ReplaySource.tick` by a serial/UDP reader. There is no C++ implementation.
 
 Run: `cd edge_engine && ./run_edge.sh`, then `/health`, `/dashboard`, `ws://HOST:8080/ws/telemetry?speed=N`.
-`/health` reports measured rate and latency.
+`/health` reports measured rate and latency (measured over a local WebSocket: see `achieved_hz`).
 
 ## 7. Limitations and next steps
 
