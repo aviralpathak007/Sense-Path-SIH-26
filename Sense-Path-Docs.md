@@ -18,6 +18,11 @@ This documentation serves as a comprehensive guide to the architecture, state ma
     - [Heads-Up Display (HUD)](#heads-up-display-hud)
     - [Hackathon Demo Controls](#hackathon-demo-controls)
 4. [File Structure Overview](#file-structure-overview)
+5. [Phase 2: ML Pipeline & Kinematics Engine](#phase-2-ml-pipeline--kinematics-engine)
+    - [Dataset Preprocessing (IO-VNBD)](#dataset-preprocessing-io-vnbd)
+    - [CNN-GRU Architecture](#cnn-gru-architecture)
+    - [Benchmarks & Evaluation](#benchmarks--evaluation)
+    - [Training & Export Instructions](#training--export-instructions)
 
 ---
 
@@ -110,3 +115,73 @@ lib/
 2. For iOS, ensure `NSLocationWhenInUseUsageDescription` is in `ios/Runner/Info.plist`.
 3. For Android, ensure `android.permission.ACCESS_FINE_LOCATION` is in `android/app/src/main/AndroidManifest.xml`.
 4. Run the app: `flutter run`
+
+---
+
+## Phase 2: ML Pipeline & Kinematics Engine
+
+The Intelligent Dead Reckoning (IDR) relies on a deep learning model to estimate forward velocity purely from IMU data during GNSS blackouts. The pipeline is located in the `ml_pipeline` folder and uses PyTorch.
+
+### Dataset Preprocessing (IO-VNBD)
+
+The IO-VNBD dataset provides synchronized vehicle GPS and smartphone IMU telemetry. The pipeline prepares this data as follows:
+- **Feature Extraction**: 6-axis IMU data (3-axis accelerometer and 3-axis gyroscope) is extracted and Z-score normalized.
+- **Sliding Windows**: The continuous data stream is chunked into 1-second sequences (100 samples at 100 Hz) using a sliding window approach with a 50% overlap.
+- **Target Value**: The ground-truth forward vehicle velocity at the end of the sliding window is extracted from GPS/odometry columns for supervision.
+
+### CNN-GRU Architecture
+
+The core of the kinematics engine is the `KinematicVelocityNet` (`model.py`), which leverages a hybrid deep learning architecture:
+1. **1D CNN Layer**: Acts as a high-frequency filter, using two convolutional blocks (`Conv1d` + `ReLU` + `MaxPool1d`) to suppress road vibrations and isolate vehicle dynamics.
+2. **Bidirectional GRU**: A 2-layer BiGRU captures the complex temporal dependencies and integration mechanics required to convert acceleration events into velocity states over the window period.
+3. **Dense Regression Head**: The output of the final time step is passed through a dense layer with dropout, producing a single continuous output predicting the current forward velocity in m/s.
+
+### Benchmarks & Evaluation
+
+The pipeline includes an evaluation script (`evaluate.py`) that runs inference on a test sequence and generates a matplotlib chart (`drift_benchmark.png`). This benchmark compares:
+- **Ground Truth Velocity**: The true speed recorded by vehicle odometry.
+- **Raw Double-Integration**: A classical naive approach plotting velocity from integrating forward acceleration, demonstrating rapid exponential drift.
+- **AI-Predicted Velocity**: The stable, drift-corrected predictions from the `KinematicVelocityNet`.
+
+### Training & Export Instructions
+
+The ML pipeline is designed to automatically detect and utilize Apple Silicon `mps` or Nvidia `cuda` acceleration, falling back to CPU.
+
+**Dependencies:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install torch pandas numpy matplotlib onnx
+```
+
+**1. Preparing the Real Dataset:**
+Extract the raw Git LFS IO-VNBD dataset using the included python script to format it for our model (this fetches the true dataset, not the LFS pointers!):
+```bash
+python3 prepare_data.py
+```
+
+**2. Training the Model:**
+Run the training script with paths to your train and validation IO-VNBD splits. It uses Mean Squared Error (MSE) loss, the Adam optimizer, and implements early stopping based on validation loss.
+```bash
+python3 ml_pipeline/train.py --train_csv data/train_iovnbd.csv --val_csv data/val_iovnbd.csv
+```
+
+**3. Running the Benchmark:**
+Generate the drift benchmark plot against a test sequence:
+```bash
+python3 ml_pipeline/evaluate.py --test_csv data/test_iovnbd.csv
+```
+
+**4. Exporting for Edge Deployment (ONNX):**
+Convert the PyTorch `.pt` weights directly to `.onnx`. We bypass TFLite to avoid Apple Silicon C++ mutex compilation deadlocks:
+```bash
+python3 ml_pipeline/export_onnx.py
+```
+This generates `model.onnx` which is moved to the `assets/` directory of the Flutter app.
+
+### Flutter ONNX Integration
+
+We use the official `onnxruntime` package for Flutter to execute the kinematics model directly in a Dart Isolate.
+- **`onnx_runner.dart`**: Contains the `OnnxVelocityEstimator` class that initializes the `OrtEnv` and `OrtSession` using the `model.onnx` asset.
+- **Input**: Accepts a 600-element `Float32List` representing the 1-second 6-axis IMU window (`1x6x100` tensor).
+- **Output**: Predicts real-time velocity instantly on the device, bridging the AI into the `DeadReckoningEngine` for continuous navigation during GPS blackouts!

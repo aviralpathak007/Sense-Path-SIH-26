@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+venv/
+data/
+best_model.pt
+drift_benchmark.png
