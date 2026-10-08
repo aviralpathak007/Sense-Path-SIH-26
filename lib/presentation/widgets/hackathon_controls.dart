@@ -17,7 +17,7 @@ class HackathonControls extends ConsumerWidget {
       onPressed: () {
         showModalBottomSheet(
           context: context,
-          builder: (context) => _buildMenu(context, notifier, isOutage),
+          builder: (context) => _buildMenu(context, notifier, state),
         );
       },
       label: const Text('Judge Demo'),
@@ -26,7 +26,8 @@ class HackathonControls extends ConsumerWidget {
     );
   }
 
-  Widget _buildMenu(BuildContext context, NavigationNotifier notifier, bool isOutage) {
+  Widget _buildMenu(BuildContext context, NavigationNotifier notifier, KinematicsState state) {
+    final isOutage = state.gnssStatus == GnssStatus.blackout;
     return Container(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -68,6 +69,28 @@ class HackathonControls extends ConsumerWidget {
                 },
               ),
             ],
+          ),
+          ListTile(
+            title: const Text('Data Source Mode'),
+            subtitle: SegmentedButton<DataSourceMode>(
+              segments: const [
+                ButtonSegment(
+                  value: DataSourceMode.internalImu,
+                  label: Text('Internal (10Hz)'),
+                  icon: Icon(Icons.smartphone),
+                ),
+                ButtonSegment(
+                  value: DataSourceMode.edgeFog,
+                  label: Text('Edge FOG (200Hz)'),
+                  icon: Icon(Icons.router),
+                ),
+              ],
+              selected: {state.dataSourceMode},
+              onSelectionChanged: (Set<DataSourceMode> newSelection) {
+                notifier.setDataSourceMode(newSelection.first);
+                Navigator.pop(context);
+              },
+            ),
           ),
           ListTile(
             leading: const Icon(Icons.align_horizontal_center),

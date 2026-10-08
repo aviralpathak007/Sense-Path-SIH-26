@@ -230,3 +230,23 @@ To meet the ISRO constraints for high-precision, external edge node processing (
   ./run_edge.sh
   ```
   Check the performance via `curl http://localhost:8080/health`.
+
+---
+
+## Phase 5: Demonstration Suite, Edge Sync & ISRO Benchmark Verification
+
+### 1. Flutter Dual-Source Telemetry Sync
+The mobile application features a runtime toggle allowing judges to switch the active navigation telemetry source:
+- **Mode A (Smartphone 10 Hz)**: Completely edge-independent, running inference on the local device SoC.
+- **Mode B (Edge FOG 200 Hz)**: Bypasses the local sensor engine. Instead, a Dart `WebSocketChannel` connects to the Edge Engine (`ws://localhost:8080/ws/telemetry`) and consumes external PVA state data seamlessly plotting it onto the flutter UI Map.
+
+### 2. Automated ISRO Benchmark Suite
+The project evaluates IO-VNBD dataset compliance through `ml_pipeline/benchmark_suite.py`.
+- Computes **Maximum & Average Drift** (< 5 m over 50m outage).
+- Computes **Cumulative Drift Percentage** (< 10% over 1000m outage).
+- Automatically generates publication-quality data plots (`isro_benchmark_comparison.png`) and validation JSON reports.
+
+### 3. Live Web Dashboard
+For headless edge systems, the python backend serves a live UI telemetry dashboard at `http://localhost:8080/dashboard`.
+- Uses `Leaflet.js` mapped directly to the `WebSocket` broadcast.
+- Provides a desktop-scale presentation layer perfect for the jury to monitor real-time AI dead reckoning logic alongside the mobile client!

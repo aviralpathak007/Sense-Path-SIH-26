@@ -97,6 +97,8 @@ class _NavigationMapScreenState extends ConsumerState<NavigationMapScreen> {
                   speed: state.speed,
                   driftMeters: state.driftMeters,
                   isAligned: state.isAligned,
+                  dataSourceMode: state.dataSourceMode,
+                  telemetryHz: state.telemetryHz,
                 ),
               ],
             ),

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SensePath ISRO Judge Demo</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #111; color: #eee; }
+        #map { height: 70vh; width: 100%; border-bottom: 2px solid #444; }
+        .dashboard { display: flex; justify-content: space-around; padding: 20px; text-align: center; }
+        .metric { background: #222; padding: 20px; border-radius: 12px; width: 20%; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .metric h3 { margin: 0 0 10px 0; font-size: 14px; color: #888; text-transform: uppercase; }
+        .metric p { margin: 0; font-size: 32px; font-weight: bold; color: #4CAF50; }
+        #status { font-size: 14px; color: #ff9800; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div class="dashboard">
+        <div class="metric">
+            <h3>Velocity</h3>
+            <p id="speed">0.0 <span style="font-size:16px;">km/h</span></p>
+        </div>
+        <div class="metric">
+            <h3>Heading</h3>
+            <p id="heading">0.0 <span style="font-size:16px;">°</span></p>
+        </div>
+        <div class="metric">
+            <h3>Telemetry Sync</h3>
+            <p id="hz" style="color: #2196F3;">200 <span style="font-size:16px;">Hz</span></p>
+        </div>
+        <div class="metric">
+            <h3>System Status</h3>
+            <p id="status">CONNECTING...</p>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // Initialize Map
+        const map = L.map('map').setView([0, 0], 18);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        const marker = L.circleMarker([0, 0], { color: 'red', radius: 8 }).addTo(map);
+        const polyline = L.polyline([], { color: 'orange', weight: 4 }).addTo(map);
+
+        let ws;
+        function connect() {
+            // Adjust ws URL based on host
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host;
+            ws = new WebSocket(`${protocol}//${host}/ws/telemetry`);
+
+            ws.onopen = () => {
+                document.getElementById('status').innerText = 'LIVE (FOG AI)';
+                document.getElementById('status').style.color = '#4CAF50';
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                const state = data.state;
+
+                // Update metrics
+                document.getElementById('speed').innerHTML = `${(state.speed * 3.6).toFixed(1)} <span style="font-size:16px;">km/h</span>`;
+                document.getElementById('heading').innerHTML = `${state.bearing.toFixed(1)} <span style="font-size:16px;">°</span>`;
+
+                // Update map
+                const latlng = [state.lat, state.lon];
+                marker.setLatLng(latlng);
+                polyline.addLatLng(latlng);
+                map.panTo(latlng, { animate: false });
+            };
+
+            ws.onclose = () => {
+                document.getElementById('status').innerText = 'DISCONNECTED';
+                document.getElementById('status').style.color = 'red';
+                setTimeout(connect, 2000);
+            };
+        }
+
+        connect();
+    </script>
+</body>
+</html>

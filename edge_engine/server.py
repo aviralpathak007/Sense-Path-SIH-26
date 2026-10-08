@@ -1,10 +1,14 @@
 import asyncio
 import json
 from fastapi import FastAPI, WebSocket
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from edge_fusion import EdgeFusionEngine
 from fog_streamer import FOGStreamer
 
 app = FastAPI()
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 fusion_engine = EdgeFusionEngine()
 streamer = FOGStreamer(frequency=200)
 
@@ -38,6 +42,11 @@ async def health():
         "imu_frequency_hz": streamer.frequency,
         "avg_ai_latency_ms": round(fusion_engine.get_avg_inference_latency(), 2)
     }
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def get_dashboard():
+    with open("static/dashboard.html", "r") as f:
+        return f.read()
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,6 +1,7 @@
 import 'package:latlong2/latlong.dart';
 
 enum GnssStatus { strong, degraded, blackout }
+enum DataSourceMode { internalImu, edgeFog }
 
 class KinematicsState {
   final LatLng position;
@@ -11,6 +12,8 @@ class KinematicsState {
   final bool isAligned;
   final List<LatLng> historicalPath;
   final List<LatLng> drPath;
+  final DataSourceMode dataSourceMode;
+  final int telemetryHz;
 
   const KinematicsState({
     required this.position,
@@ -21,6 +24,8 @@ class KinematicsState {
     required this.isAligned,
     required this.historicalPath,
     required this.drPath,
+    this.dataSourceMode = DataSourceMode.internalImu,
+    this.telemetryHz = 10,
   });
 
   KinematicsState copyWith({
@@ -32,6 +37,8 @@ class KinematicsState {
     bool? isAligned,
     List<LatLng>? historicalPath,
     List<LatLng>? drPath,
+    DataSourceMode? dataSourceMode,
+    int? telemetryHz,
   }) {
     return KinematicsState(
       position: position ?? this.position,
@@ -42,6 +49,8 @@ class KinematicsState {
       isAligned: isAligned ?? this.isAligned,
       historicalPath: historicalPath ?? this.historicalPath,
       drPath: drPath ?? this.drPath,
+      dataSourceMode: dataSourceMode ?? this.dataSourceMode,
+      telemetryHz: telemetryHz ?? this.telemetryHz,
     );
   }
 }

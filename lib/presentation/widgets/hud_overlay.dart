@@ -58,16 +58,24 @@ class TelemetryHud extends StatelessWidget {
   final double speed;
   final double driftMeters;
   final bool isAligned;
+  final DataSourceMode dataSourceMode;
+  final int telemetryHz;
 
   const TelemetryHud({
     super.key,
     required this.speed,
     required this.driftMeters,
     required this.isAligned,
+    required this.dataSourceMode,
+    required this.telemetryHz,
   });
 
   @override
   Widget build(BuildContext context) {
+    String modeText = dataSourceMode == DataSourceMode.internalImu 
+        ? "Mode: Internal IMU (\$telemetryHz Hz)" 
+        : "Mode: Edge FOG Engine (\$telemetryHz Hz)";
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -78,6 +86,8 @@ class TelemetryHud extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text(modeText, style: const TextStyle(color: Colors.blueAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [

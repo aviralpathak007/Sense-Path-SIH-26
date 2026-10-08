@@ -4,6 +4,7 @@ import '../../data/models/kinematics.dart';
 import '../dr_engine/dead_reckoning_engine.dart';
 import '../../data/sensors/sensor_service.dart';
 import '../scenario/scenario_player.dart';
+import '../services/edge_sync_service.dart';
 
 final navigationProvider = NotifierProvider<NavigationNotifier, KinematicsState>(() {
   return NavigationNotifier();
@@ -13,6 +14,7 @@ class NavigationNotifier extends Notifier<KinematicsState> {
   late final DeadReckoningEngine _engine;
   late final SensorService _sensorService;
   late final ScenarioPlayer _scenarioPlayer;
+  late final EdgeSyncService _edgeSyncService;
   
   // Track paths
   final List<LatLng> _historicalPath = [];
@@ -47,6 +49,7 @@ class NavigationNotifier extends Notifier<KinematicsState> {
     await _sensorService.start();
 
     _scenarioPlayer = ScenarioPlayer(this);
+    _edgeSyncService = EdgeSyncService(this);
   }
 
   void _handleEngineUpdate(EngineStateUpdate update) {
@@ -100,4 +103,27 @@ class NavigationNotifier extends Notifier<KinematicsState> {
     _engine.feedGpsData(pos, bearing, speed);
   }
 
+  void setDataSourceMode(DataSourceMode mode) {
+    if (mode == DataSourceMode.edgeFog) {
+      _edgeSyncService.connect("ws://localhost:8080/ws/telemetry");
+      state = state.copyWith(dataSourceMode: mode, telemetryHz: 200);
+    } else {
+      _edgeSyncService.disconnect();
+      state = state.copyWith(dataSourceMode: mode, telemetryHz: 10);
+    }
+  }
+
+  void feedEdgeTelemetry(LatLng pos, double bearing, double speed) {
+    if (state.dataSourceMode == DataSourceMode.edgeFog) {
+      // In edge mode, we bypass local engine drift computations
+      _drPath.add(pos);
+      state = state.copyWith(
+        position: pos,
+        bearing: bearing,
+        speed: speed,
+        gnssStatus: GnssStatus.blackout, // Simulate edge doing DR
+        drPath: List.from(_drPath),
+      );
+    }
+  }
 }
