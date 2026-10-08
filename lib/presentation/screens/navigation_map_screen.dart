@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_map/flutter_map.dart';
 import '../../domain/providers/navigation_provider.dart';
@@ -17,6 +20,23 @@ class NavigationMapScreen extends ConsumerStatefulWidget {
 
 class _NavigationMapScreenState extends ConsumerState<NavigationMapScreen> {
   final MapController _mapController = MapController();
+  List<Polyline> _roads = const []; // bundled OpenStreetMap road network (works offline)
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRoads();
+  }
+
+  Future<void> _loadRoads() async {
+    final doc = json.decode(await rootBundle.loadString('assets/maps/road_network.json'));
+    final lines = <Polyline>[];
+    for (final f in doc['features']) {
+      final pts = [for (final c in f['geometry']['coordinates']) LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())];
+      lines.add(Polyline(points: pts, strokeWidth: 2.0, color: const Color(0xFF6B7280)));
+    }
+    if (mounted) setState(() => _roads = lines);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -44,14 +64,18 @@ class _NavigationMapScreenState extends ConsumerState<NavigationMapScreen> {
                 urlTemplate: 'assets/tiles/{z}/{x}/{y}.png',
                 tileProvider: FallbackGridTileProvider(),
               ),
+              PolylineLayer(polylines: _roads),
               PolylineLayer(
                 polylines: [
-                  // Historical ground-truth path (Green)
+                  // Reference path (scenario replay only)
+                  if (state.truthPath.isNotEmpty)
+                    Polyline(points: state.truthPath, strokeWidth: 5.0, color: Colors.greenAccent.withValues(alpha: 0.6)),
+                  // Position while GNSS is available (blue)
                   if (state.historicalPath.isNotEmpty)
                     Polyline(
                       points: state.historicalPath,
-                      strokeWidth: 4.0,
-                      color: Colors.green,
+                      strokeWidth: 3.0,
+                      color: Colors.lightBlueAccent,
                     ),
                   // AI Dead Reckoning trajectory during outages (Orange/Cyan)
                   if (state.drPath.isNotEmpty)
@@ -97,6 +121,7 @@ class _NavigationMapScreenState extends ConsumerState<NavigationMapScreen> {
                 TelemetryHud(
                   speed: state.speed,
                   driftMeters: state.driftMeters,
+                  outageDistance: state.outageDistance,
                   isAligned: state.isAligned,
                   dataSourceMode: state.dataSourceMode,
                   telemetryHz: state.telemetryHz,

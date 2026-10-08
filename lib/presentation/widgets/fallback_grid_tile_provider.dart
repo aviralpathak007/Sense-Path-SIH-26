@@ -1,5 +1,5 @@
 import 'dart:ui' as ui;
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -31,7 +31,7 @@ class _FallbackGridImageProvider extends ImageProvider<_FallbackGridImageProvide
   }
 
   Future<ui.Codec> _loadAsync(_FallbackGridImageProvider key, ImageDecoderCallback decode) async {
-    final String assetPath = 'assets/tiles/\${key.coordinates.z}/\${key.coordinates.x}/\${key.coordinates.y}.png';
+    final String assetPath = 'assets/tiles/${key.coordinates.z}/${key.coordinates.x}/${key.coordinates.y}.png';
     
     try {
       final ByteData data = await rootBundle.load(assetPath);
@@ -67,7 +67,7 @@ class _FallbackGridImageProvider extends ImageProvider<_FallbackGridImageProvide
     // Text Label
     final textPainter = TextPainter(
       text: TextSpan(
-        text: 'Z:\${coords.z} X:\${coords.x} Y:\${coords.y}\\nOFFLINE FALLBACK',
+        text: 'Z:${coords.z} X:${coords.x} Y:${coords.y}\nOFFLINE GRID',
         style: const TextStyle(color: Colors.greenAccent, fontSize: 12),
       ),
       textDirection: TextDirection.ltr,

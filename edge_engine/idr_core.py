@@ -162,11 +162,11 @@ class OrtStep:
 class IdrCore:
     """Speed estimator with seamless GNSS <-> dead-reckoning switching."""
 
-    def __init__(self, onnx_path):
+    def __init__(self, onnx_path=None, stepper=None):
         self.feat = FeatureStream()
         self.axis = ForwardAxisCalibrator()
         self.yaw = YawAxisCalibrator()
-        self.net = OrtStep(onnx_path)
+        self.net = stepper if stepper is not None else OrtStep(onnx_path)
         self.speed = 0.0
         self.gnss_speed = 0.0
         self.mode = "gnss"          # "gnss" | "dr"

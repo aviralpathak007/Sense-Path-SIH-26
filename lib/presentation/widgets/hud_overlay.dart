@@ -56,7 +56,8 @@ class GnssBadge extends StatelessWidget {
 
 class TelemetryHud extends StatelessWidget {
   final double speed;
-  final double driftMeters;
+  final double driftMeters; // < 0: no reference available
+  final double outageDistance;
   final bool isAligned;
   final DataSourceMode dataSourceMode;
   final int telemetryHz;
@@ -65,6 +66,7 @@ class TelemetryHud extends StatelessWidget {
     super.key,
     required this.speed,
     required this.driftMeters,
+    required this.outageDistance,
     required this.isAligned,
     required this.dataSourceMode,
     required this.telemetryHz,
@@ -73,8 +75,17 @@ class TelemetryHud extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     String modeText = dataSourceMode == DataSourceMode.internalImu 
-        ? "Mode: Internal IMU (\$telemetryHz Hz)" 
-        : "Mode: Edge FOG Engine (\$telemetryHz Hz)";
+        ? 'Mode: Internal IMU (output $telemetryHz Hz)'
+        : 'Mode: Edge engine, external IMU ($telemetryHz Hz propagation)';
+    final inOutage = outageDistance > 0;
+    String driftText;
+    if (driftMeters >= 0 && outageDistance > 5) {
+      driftText = '${driftMeters.toStringAsFixed(0)} m (${(100 * driftMeters / outageDistance).toStringAsFixed(1)}%)';
+    } else if (inOutage) {
+      driftText = '${outageDistance.toStringAsFixed(0)} m driven';
+    } else {
+      driftText = '--';
+    }
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -92,7 +103,7 @@ class TelemetryHud extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               _buildMetric('Velocity', '${(speed * 3.6).toStringAsFixed(1)} km/h', Colors.cyan),
-              _buildMetric('Drift', '${driftMeters.toStringAsFixed(2)} m', Colors.orange),
+              _buildMetric(driftMeters >= 0 ? 'Error vs reference' : 'Outage distance', driftText, Colors.orange),
             ],
           ),
           const SizedBox(height: 16),
@@ -105,7 +116,7 @@ class TelemetryHud extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Text(
-                isAligned ? 'Alignment Matrix: OK' : 'Alignment Required',
+                isAligned ? 'Mount axes calibrated from GNSS' : 'Calibrating mount axes: drive with GNSS on',
                 style: const TextStyle(color: Colors.white70),
               ),
             ],

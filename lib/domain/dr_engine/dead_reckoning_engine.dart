@@ -1,20 +1,20 @@
 import 'dart:async';
 import 'dart:isolate';
-import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:latlong2/latlong.dart';
 import '../../data/models/kinematics.dart';
-import 'alignment_calibrator.dart';
-import 'kalman_filter.dart';
+import 'idr_core.dart';
+import 'idr_nav.dart';
 import 'map_matcher.dart';
 import 'onnx_runner.dart';
-import 'thermal_guard.dart';
 
-// Messages for isolate
+// ---- Messages (UI isolate -> engine isolate) ----
 class InitEngineMsg {
   final SendPort sendPort;
   final RootIsolateToken token;
-  InitEngineMsg(this.sendPort, this.token);
+  final Uint8List modelBytes;
+  final String roadsJson;
+  InitEngineMsg(this.sendPort, this.token, this.modelBytes, this.roadsJson);
 }
 
 class UpdateSensorMsg {
@@ -26,7 +26,8 @@ class UpdateGpsMsg {
   final LatLng position;
   final double bearing;
   final double speed;
-  UpdateGpsMsg(this.position, this.bearing, this.speed);
+  final double accuracy;
+  UpdateGpsMsg(this.position, this.bearing, this.speed, this.accuracy);
 }
 
 class SimulateOutageMsg {
@@ -36,35 +37,42 @@ class SimulateOutageMsg {
 
 class CalibrateMountMsg {}
 
+class ResetMsg {}
+
+// ---- Engine -> UI ----
 class EngineStateUpdate {
   final LatLng position;
   final double bearing;
   final double speed;
-  final double driftMeters;
+  final double outageDistance;
   final bool isOutage;
-
+  final bool calibrated; // forward + yaw axes learned from GNSS
   EngineStateUpdate({
     required this.position,
     required this.bearing,
     required this.speed,
-    required this.driftMeters,
+    required this.outageDistance,
     required this.isOutage,
+    required this.calibrated,
   });
 }
 
+/// Runs the whole IDR stack (features, calibration, DRNet via ONNX, navigation) in a background
+/// isolate at 10 Hz. Raw phone sensors arrive at ~50 Hz and are averaged into 10 Hz samples.
 class DeadReckoningEngine {
   SendPort? _isolateSendPort;
   final ReceivePort _receivePort = ReceivePort();
   Isolate? _isolate;
-  
   final void Function(EngineStateUpdate) onUpdate;
 
   DeadReckoningEngine({required this.onUpdate});
 
   Future<void> start() async {
-    RootIsolateToken rootToken = RootIsolateToken.instance!;
-    _isolate = await Isolate.spawn(_engineEntry, InitEngineMsg(_receivePort.sendPort, rootToken));
-    
+    final rootToken = RootIsolateToken.instance!;
+    // Assets are read here: rootBundle does not exist inside a background isolate.
+    final model = (await rootBundle.load('assets/dr_net.onnx')).buffer.asUint8List();
+    final roads = await rootBundle.loadString('assets/maps/road_network.json');
+    _isolate = await Isolate.spawn(_engineEntry, InitEngineMsg(_receivePort.sendPort, rootToken, model, roads));
     _receivePort.listen((message) {
       if (message is SendPort) {
         _isolateSendPort = message;
@@ -79,157 +87,93 @@ class DeadReckoningEngine {
     _isolate?.kill(priority: Isolate.immediate);
   }
 
-  void feedSensorData(SensorData data) {
-    _isolateSendPort?.send(UpdateSensorMsg(data));
-  }
+  void feedSensorData(SensorData data) => _isolateSendPort?.send(UpdateSensorMsg(data));
+  void feedGpsData(LatLng position, double bearing, double speed, [double accuracy = 5.0]) =>
+      _isolateSendPort?.send(UpdateGpsMsg(position, bearing, speed, accuracy));
+  void setSimulateOutage(bool isOutage) => _isolateSendPort?.send(SimulateOutageMsg(isOutage));
+  void calibrateMount() => _isolateSendPort?.send(CalibrateMountMsg());
+  void reset() => _isolateSendPort?.send(ResetMsg());
 
-  void feedGpsData(LatLng position, double bearing, double speed) {
-    _isolateSendPort?.send(UpdateGpsMsg(position, bearing, speed));
-  }
+  static const double _maxFixAccuracyM = 50.0;
+  static const bool _enableMapMatching = false; // see Sense-Path-Docs.md (not yet shown to help)
 
-  void setSimulateOutage(bool isOutage) {
-    _isolateSendPort?.send(SimulateOutageMsg(isOutage));
-  }
-
-  void calibrateMount() {
-    _isolateSendPort?.send(CalibrateMountMsg());
-  }
-
-  // --- Isolate Entry Point ---
-  static void _engineEntry(InitEngineMsg initMsg) async {
-    BackgroundIsolateBinaryMessenger.ensureInitialized(initMsg.token);
-    
+  static void _engineEntry(InitEngineMsg init) async {
+    BackgroundIsolateBinaryMessenger.ensureInitialized(init.token);
     final receivePort = ReceivePort();
-    initMsg.sendPort.send(receivePort.sendPort);
+    init.sendPort.send(receivePort.sendPort);
 
-    // Initialize modules
-    final calibrator = AlignmentCalibrator();
-    final kf = KalmanFilter();
-    final mapMatcher = MapMatcher();
-    final aiEstimator = OnnxVelocityEstimator();
-    final thermalGuard = ThermalGuard();
-    
-    await mapMatcher.loadMap('assets/maps/sample_road_network.json');
-    await aiEstimator.init();
+    final runner = DrStepRunner()..init(init.modelBytes);
+    final mapMatcher = MapMatcher()..loadFromString(init.roadsJson);
 
-    bool isOutage = false;
-    double driftMeters = 0.0;
-    LatLng startOutagePos = const LatLng(0, 0);
-    
-    int lastTime = DateTime.now().millisecondsSinceEpoch;
-    int lastGpsTime = DateTime.now().millisecondsSinceEpoch;
-    int frameCount = 0;
+    var nav = IdrNav(runner);
+    var forcedOutage = false;
+    var tick = 0; // virtual 10 Hz clock: deterministic and independent of replay speed
 
-    // AI sliding window (6 channels, 100 samples)
-    List<double> imuWindow = [];
+    // 50 Hz -> 10 Hz binning (live sensors only)
+    final accSum = [0.0, 0.0, 0.0], gyroSum = [0.0, 0.0, 0.0];
+    var binCount = 0;
+    var lastBinMs = DateTime.now().millisecondsSinceEpoch;
+
+    void emit(NavOutput o) {
+      var pos = LatLng(o.lat, o.lon);
+      if (_enableMapMatching && o.inOutage) {
+        pos = mapMatcher.snapToMap(pos, o.bearingDeg);
+        nav.lat = pos.latitude;
+        nav.lon = pos.longitude;
+      }
+      init.sendPort.send(EngineStateUpdate(
+        position: pos,
+        bearing: o.bearingDeg,
+        speed: o.speed,
+        outageDistance: o.outageDistance,
+        isOutage: o.inOutage,
+        calibrated: nav.core.canDeadReckon,
+      ));
+    }
+
+    void processSample(List<double> acc, List<double> gyro) {
+      final o = nav.onImu(acc, gyro, tick * kDt);
+      tick++;
+      if (o != null) emit(o);
+    }
 
     receivePort.listen((message) {
-      int now = DateTime.now().millisecondsSinceEpoch;
-      double dt = (now - lastTime) / 1000.0;
-      lastTime = now;
-
-      // Seamless Deficit Handler: Auto-outage if GPS lost for >1.0s
-      if (!isOutage && (now - lastGpsTime > 1000) && kf.lat != 0) {
-        isOutage = true;
-        startOutagePos = kf.position;
-        driftMeters = 0.0;
-      }
-
-      if (message is CalibrateMountMsg) {
-        calibrator.forceCalibration();
-      } else if (message is UpdateGpsMsg) {
-        lastGpsTime = now;
-        if (!isOutage) {
-          if (kf.lat == 0) { // first fix
-            kf.initState(message.position, message.bearing, message.speed);
-          } else {
-            kf.updateGNSS(message.position, message.bearing, message.speed);
-          }
-          driftMeters = 0.0;
-          
-          initMsg.sendPort.send(EngineStateUpdate(
-            position: kf.position,
-            bearing: kf.bearing,
-            speed: kf.speed,
-            driftMeters: driftMeters,
-            isOutage: isOutage,
-          ));
-        } else {
-          // Smoothly transition from Outage back to GNSS
-          kf.updateGNSS(message.position, message.bearing, message.speed);
-          isOutage = false;
-          driftMeters = 0.0;
-        }
+      if (message is UpdateGpsMsg) {
+        if (forcedOutage || message.accuracy > _maxFixAccuracyM) return; // unusable fix
+        nav.onGnss(message.position.latitude, message.position.longitude, message.bearing, message.speed, tick * kDt);
       } else if (message is UpdateSensorMsg) {
-        // 1. Calibrate / Project to vehicle frame
-        calibrator.feedSensor(message.data.accelX, message.data.accelY, message.data.accelZ);
-        List<double> vAccel = calibrator.projectToVehicleFrame(message.data.accelX, message.data.accelY, message.data.accelZ);
-        List<double> vGyro = calibrator.projectToVehicleFrame(message.data.gyroX, message.data.gyroY, message.data.gyroZ);
-        
-        // Use vehicle Forward Accel (X-axis) and Yaw Rate (Z-axis)
-        double forwardAccel = vAccel[0];
-        double yawRate = vGyro[2];
-
-        // Append to sliding window (normalized)
-        imuWindow.addAll([vAccel[0], vAccel[1], vAccel[2], vGyro[0], vGyro[1], vGyro[2]]);
-        if (imuWindow.length > 600) {
-          imuWindow.removeRange(0, 6);
+        final d = message.data;
+        if (d.preBinned) {
+          processSample([d.accelX, d.accelY, d.accelZ], [d.gyroX, d.gyroY, d.gyroZ]);
+          return;
         }
-
-        if (kf.lat != 0) {
-          // 2. Predict step
-          kf.predict(dt, forwardAccel, yawRate);
-
-          if (isOutage) {
-            // 3. AI Dead Reckoning Update & NHC Constraint
-            if (imuWindow.length == 600) {
-              frameCount++;
-              bool shouldRun = true;
-              
-              if (thermalGuard.shouldThrottle()) {
-                // Throttle to 5 Hz (skip every other frame)
-                shouldRun = frameCount % 2 == 0;
-              }
-
-              if (shouldRun) {
-                Float32List tensorData = Float32List.fromList(imuWindow);
-                int infStart = DateTime.now().millisecondsSinceEpoch;
-                
-                double aiVelocity = aiEstimator.estimateVelocity(tensorData);
-                
-                int infEnd = DateTime.now().millisecondsSinceEpoch;
-                thermalGuard.logInferenceLatency(infEnd - infStart);
-                
-                kf.updateAI(aiVelocity);
-              }
-            }
-
-            // 4. Offline Map Matching Snapping
-            LatLng snappedPos = mapMatcher.snapToMap(kf.position, kf.bearing);
-            kf.lat = snappedPos.latitude;
-            kf.lon = snappedPos.longitude;
-
-            // Compute drift
-            final Distance distance = const Distance();
-            driftMeters = distance.as(LengthUnit.Meter, startOutagePos, kf.position);
-
-            initMsg.sendPort.send(EngineStateUpdate(
-              position: kf.position,
-              bearing: kf.bearing,
-              speed: kf.speed,
-              driftMeters: driftMeters,
-              isOutage: isOutage,
-            ));
-          }
+        accSum[0] += d.accelX;
+        accSum[1] += d.accelY;
+        accSum[2] += d.accelZ;
+        gyroSum[0] += d.gyroX;
+        gyroSum[1] += d.gyroY;
+        gyroSum[2] += d.gyroZ;
+        binCount++;
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - lastBinMs >= 100 && binCount > 0) {
+          lastBinMs = now;
+          processSample([for (final v in accSum) v / binCount], [for (final v in gyroSum) v / binCount]);
+          accSum.fillRange(0, 3, 0.0);
+          gyroSum.fillRange(0, 3, 0.0);
+          binCount = 0;
         }
       } else if (message is SimulateOutageMsg) {
-        if (message.isOutage && !isOutage) {
-          isOutage = true;
-          startOutagePos = kf.position;
-          driftMeters = 0.0;
-        } else if (!message.isOutage) {
-          isOutage = false;
-        }
+        forcedOutage = message.isOutage;
+        if (forcedOutage) nav.forceOutage();
+      } else if (message is CalibrateMountMsg) {
+        nav.core.resetCalibration();
+      } else if (message is ResetMsg) {
+        nav = IdrNav(runner);
+        forcedOutage = false;
+        tick = 0;
+        binCount = 0;
+        accSum.fillRange(0, 3, 0.0);
+        gyroSum.fillRange(0, 3, 0.0);
       }
     });
   }

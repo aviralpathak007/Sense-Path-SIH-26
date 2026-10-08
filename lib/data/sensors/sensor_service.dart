@@ -11,56 +11,34 @@ class SensorService {
   StreamSubscription? _gyroSub;
   StreamSubscription? _gpsSub;
 
-  // Store latest values to combine them
-  double _aX = 0, _aY = 0, _aZ = 0;
-  
+  // Latest accelerometer sample (WITH gravity: the IDR core estimates gravity itself).
+  double _aX = 0, _aY = 0, _aZ = 9.81;
+
   SensorService(this.engine);
 
   Future<void> start() async {
-    // Check GPS permissions
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      return;
-    }
+    if (_gpsSub != null || _accelSub != null) return;
 
-    LocationPermission permission = await Geolocator.checkPermission();
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    var permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        return;
-      }
     }
-    
-    // Start GPS stream
-    _gpsSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 0,
-      )
-    ).listen((Position position) {
-      engine.feedGpsData(
-        LatLng(position.latitude, position.longitude),
-        position.heading,
-        position.speed,
-      );
-    });
+    if (serviceEnabled && permission != LocationPermission.denied && permission != LocationPermission.deniedForever) {
+      _gpsSub = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 0),
+      ).listen((Position p) {
+        engine.feedGpsData(LatLng(p.latitude, p.longitude), p.heading, p.speed, p.accuracy);
+      });
+    }
 
-    // Start IMU streams
-    _accelSub = userAccelerometerEventStream(samplingPeriod: SensorInterval.gameInterval).listen((event) {
-      _aX = event.x;
-      _aY = event.y;
-      _aZ = event.z;
+    _accelSub = accelerometerEventStream(samplingPeriod: SensorInterval.gameInterval).listen((e) {
+      _aX = e.x;
+      _aY = e.y;
+      _aZ = e.z;
     });
-
-    _gyroSub = gyroscopeEventStream(samplingPeriod: SensorInterval.gameInterval).listen((event) {
-      engine.feedSensorData(SensorData(
-        accelX: _aX,
-        accelY: _aY,
-        accelZ: _aZ,
-        gyroX: event.x,
-        gyroY: event.y,
-        gyroZ: event.z,
-      ));
+    _gyroSub = gyroscopeEventStream(samplingPeriod: SensorInterval.gameInterval).listen((e) {
+      engine.feedSensorData(SensorData(accelX: _aX, accelY: _aY, accelZ: _aZ, gyroX: e.x, gyroY: e.y, gyroZ: e.z));
     });
   }
 
@@ -68,5 +46,6 @@ class SensorService {
     _accelSub?.cancel();
     _gyroSub?.cancel();
     _gpsSub?.cancel();
+    _accelSub = _gyroSub = _gpsSub = null;
   }
 }

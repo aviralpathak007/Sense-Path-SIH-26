@@ -31,7 +31,7 @@ def print_banner():
   ___) |  __/ | | | | \__ \  __/ (_| | |_| | | |
  |____/ \___|_| |_| |_|___/_|   \__,_|\__|_| |_|
                                                 
- ISRO Smart India Hackathon 2026 - Finalist Demo
+ ISRO Smart India Hackathon 2026
 ================================================={RESET}
     """)
 
@@ -44,7 +44,7 @@ def check_dependencies():
 
 def start_edge_server():
     global edge_process
-    print(f"{YELLOW}[*] Booting 200 Hz Edge FOG Engine...{RESET}")
+    print(f"{YELLOW}[*] Booting 200 Hz Edge Engine...{RESET}")
     
     python_path = "venv/bin/python3" if os.name != 'nt' else "venv/Scripts/python.exe"
     
@@ -70,11 +70,11 @@ def print_status_board():
     print(f"\n{CYAN}============= SYSTEM STATUS ============={RESET}")
     print(f"{GREEN}● WebSocket Server:{RESET} ws://localhost:8080/ws/telemetry")
     print(f"{GREEN}● Inference Backend:{RESET} ONNX Runtime (CPUExecutionProvider)")
-    print(f"{GREEN}● IMU Rate:{RESET} 200 Hz (FOG Simulated)")
+    print(f"{GREEN}● IMU Rate:{RESET} 200 Hz (replay of a held-out drive, interpolated from 10 Hz; not a real FOG)")
     print(f"{CYAN}========================================={RESET}")
     print(f"\n{YELLOW}Shortcuts:{RESET}")
     print(" - Press Ctrl+C to cleanly terminate the demo.")
-    print(" - On the Flutter App, use the FAB to trigger Outage Scenarios.")
+    print(" - On the Flutter App, use the Judge Demo button to replay the held-out outage scenario.")
 
 if __name__ == "__main__":
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Move to project root

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SensePath ISRO Judge Demo</title>
+    <title>SensePath Edge Engine</title>
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
@@ -28,8 +28,8 @@
             <p id="heading">0.0 <span style="font-size:16px;">°</span></p>
         </div>
         <div class="metric">
-            <h3>Telemetry Sync</h3>
-            <p id="hz" style="color: #2196F3;">200 <span style="font-size:16px;">Hz</span></p>
+            <h3>Error vs reference</h3>
+            <p id="drift" style="color: #ff9800;">--</p>
         </div>
         <div class="metric">
             <h3>System Status</h3>
@@ -49,6 +49,7 @@
 
         const marker = L.circleMarker([0, 0], { color: 'red', radius: 8 }).addTo(map);
         const polyline = L.polyline([], { color: 'orange', weight: 4 }).addTo(map);
+        const refLine = L.polyline([], { color: '#4CAF50', weight: 5, opacity: 0.6 }).addTo(map);
 
         let ws;
         function connect() {
@@ -58,7 +59,7 @@
             ws = new WebSocket(`${protocol}//${host}/ws/telemetry`);
 
             ws.onopen = () => {
-                document.getElementById('status').innerText = 'LIVE (FOG AI)';
+                document.getElementById('status').innerText = 'CONNECTED (replay)';
                 document.getElementById('status').style.color = '#4CAF50';
             };
 
@@ -69,6 +70,14 @@
                 // Update metrics
                 document.getElementById('speed').innerHTML = `${(state.speed * 3.6).toFixed(1)} <span style="font-size:16px;">km/h</span>`;
                 document.getElementById('heading').innerHTML = `${state.bearing.toFixed(1)} <span style="font-size:16px;">°</span>`;
+
+                const dr = state.mode === 'dr';
+                const st = document.getElementById('status');
+                st.innerText = dr ? 'GNSS LOST: AI DEAD RECKONING' : (state.calibrated ? 'GNSS + INS' : 'CALIBRATING (GNSS)');
+                st.style.color = dr ? '#f44336' : '#4CAF50';
+                document.getElementById('drift').innerText = (dr && state.drift_m !== null)
+                    ? `${state.drift_m.toFixed(0)} m (${(100 * state.drift_m / Math.max(state.outage_distance, 1)).toFixed(1)}%)` : '--';
+                refLine.addLatLng([state.ref_lat, state.ref_lon]);
 
                 // Update map
                 const latlng = [state.lat, state.lon];

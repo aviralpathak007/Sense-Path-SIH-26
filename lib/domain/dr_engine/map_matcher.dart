@@ -1,30 +1,26 @@
 import 'dart:convert';
 import 'dart:math';
-import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 
 class MapMatcher {
   final List<List<LatLng>> _roadSegments = [];
   bool _isLoaded = false;
 
-  Future<void> loadMap(String assetPath) async {
+  /// [geoJson] is assets/maps/road_network.json (read on the main isolate).
+  void loadFromString(String geoJson) {
     try {
-      final String geoJsonString = await rootBundle.loadString(assetPath);
-      final data = json.decode(geoJsonString);
-
-      if (data['features'] != null) {
-        for (var feature in data['features']) {
-          if (feature['geometry']['type'] == 'LineString') {
-            List coords = feature['geometry']['coordinates'];
-            List<LatLng> segment = coords.map((c) => LatLng(c[1], c[0])).toList();
-            _roadSegments.add(segment);
-          }
+      final data = json.decode(geoJson);
+      for (final feature in data['features'] ?? []) {
+        if (feature['geometry']['type'] == 'LineString') {
+          final coords = feature['geometry']['coordinates'] as List;
+          _roadSegments.add([for (final c in coords) LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())]);
         }
       }
       _isLoaded = true;
-      print("Offline map matching loaded ${_roadSegments.length} segments.");
+      debugPrint('Offline map matching loaded ${_roadSegments.length} road segments.');
     } catch (e) {
-      print("Failed to load map network: $e");
+      debugPrint('Failed to load map network: $e');
     }
   }
 

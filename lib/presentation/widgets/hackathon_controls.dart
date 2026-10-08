@@ -11,8 +11,6 @@ class HackathonControls extends ConsumerWidget {
     final state = ref.watch(navigationProvider);
     final notifier = ref.read(navigationProvider.notifier);
     
-    final isOutage = state.gnssStatus == GnssStatus.blackout;
-
     return FloatingActionButton.extended(
       onPressed: () {
         showModalBottomSheet(
@@ -45,26 +43,20 @@ class HackathonControls extends ConsumerWidget {
           ExpansionTile(
             leading: const Icon(Icons.play_circle_fill),
             title: const Text('Load Preset Scenario'),
-            subtitle: const Text('Playback real-world IO-VNBD dataset'),
+            subtitle: const Text('Replays recorded phone IMU; the engine sees live-equivalent input'),
             children: [
               ListTile(
-                title: const Text('500m Tunnel Outage'),
+                title: const Text('Held-out drive, 90 s GNSS outage (5x)'),
+                subtitle: const Text('IO-VNBD Driver A, never used for training'),
                 onTap: () {
-                  notifier.loadPresetScenario('assets/scenarios/tunnel_blackout_scenario.json');
+                  notifier.loadPresetScenario('assets/scenarios/heldout_outage_scenario.json', speedup: 5);
                   Navigator.pop(context);
                 },
               ),
               ListTile(
-                title: const Text('Urban Canyon Blackout'),
+                title: const Text('Same drive, real time (1x)'),
                 onTap: () {
-                  notifier.loadPresetScenario('assets/scenarios/tunnel_blackout_scenario.json');
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('Stationary Idle (Engine Vibrations)'),
-                onTap: () {
-                  notifier.loadPresetScenario('assets/scenarios/tunnel_blackout_scenario.json');
+                  notifier.loadPresetScenario('assets/scenarios/heldout_outage_scenario.json', speedup: 1);
                   Navigator.pop(context);
                 },
               ),
@@ -81,7 +73,7 @@ class HackathonControls extends ConsumerWidget {
                 ),
                 ButtonSegment(
                   value: DataSourceMode.edgeFog,
-                  label: Text('Edge FOG (200Hz)'),
+                  label: Text('Edge engine (200Hz)'),
                   icon: Icon(Icons.router),
                 ),
               ],

@@ -18,8 +18,8 @@ def wrap_pi(a):
 
 
 class IdrNav:
-    def __init__(self, onnx_path):
-        self.core = IdrCore(onnx_path)
+    def __init__(self, onnx_path=None, stepper=None):
+        self.core = IdrCore(onnx_path, stepper)
         self.lat = self.lon = None
         self.psi = 0.0            # compass heading, radians clockwise from north
         self.bias = 0.0           # gyro-about-up bias, rad/s
