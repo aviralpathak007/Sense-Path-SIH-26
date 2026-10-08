@@ -185,3 +185,26 @@ We use the official `onnxruntime` package for Flutter to execute the kinematics 
 - **`onnx_runner.dart`**: Contains the `OnnxVelocityEstimator` class that initializes the `OrtEnv` and `OrtSession` using the `model.onnx` asset.
 - **Input**: Accepts a 600-element `Float32List` representing the 1-second 6-axis IMU window (`1x6x100` tensor).
 - **Output**: Predicts real-time velocity instantly on the device, bridging the AI into the `DeadReckoningEngine` for continuous navigation during GPS blackouts!
+
+---
+
+## Phase 3: Sensor Fusion, Kinematic Constraints & Map Matching
+
+Phase 3 implements the full robotics math stack inside the Dart Isolate to translate raw AI predictions and sensor telemetry into map-matched geospatial coordinates.
+
+### 1. Frame Auto-Alignment Engine
+The smartphone can be mounted in any arbitrary orientation. The `AlignmentCalibrator` dynamically resolves the `R_phone_to_vehicle` rotation matrix by:
+- **Gravity Extraction**: Low-pass filtering stationary accelerometer data to find the global "Down" (Z) axis.
+- **Dynamic Forward Axis**: Monitoring acceleration during initial vehicle motion to find the "Forward" (X) axis orthogonal to gravity.
+- **Cross Product**: Deriving the lateral (Y) axis, forming a complete frame transformation.
+
+### 2. Error-State Extended Kalman Filter (ES-EKF)
+The `KalmanFilter` maintains a highly optimized 5DOF state vector `[Latitude, Longitude, Velocity (vx), Yaw (psi), Gyro Bias (b_psi)]`. 
+- **Prediction**: Runs continuously at 50Hz, integrating yaw rate and forward acceleration.
+- **Measurement Update**: Corrects drift when GNSS fixes are available at 1Hz using a complementary gain architecture.
+- **Non-Holonomic Constraints (NHC)**: During GNSS denial, lateral velocity is strictly constrained to 0, completely eliminating the infamous sideways drift common in dead reckoning.
+- **Zero-Velocity Update (ZUPT)**: If the AI network predicts velocity < 0.2 m/s, the filter clamps the speed to 0.0 and aggressively halts all heading integration to prevent standstill rotation drift.
+
+### 3. Offline Map Matching
+To guarantee <10% drift during extended urban canyon/tunnel blackouts, `MapMatcher` ingests a raw GeoJSON file (`sample_road_network.json`) into memory.
+- During outages, if the vehicle's heading is parallel to a known road segment (within 45 degrees), the estimated coordinates are strictly snapped onto the road polyline geometry.

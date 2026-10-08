@@ -1,11 +1,19 @@
+import 'dart:async';
 import 'dart:isolate';
+import 'dart:typed_data';
+import 'package:flutter/services.dart';
 import 'package:latlong2/latlong.dart';
 import '../../data/models/kinematics.dart';
+import 'alignment_calibrator.dart';
+import 'kalman_filter.dart';
+import 'map_matcher.dart';
+import 'onnx_runner.dart';
 
 // Messages for isolate
 class InitEngineMsg {
   final SendPort sendPort;
-  InitEngineMsg(this.sendPort);
+  final RootIsolateToken token;
+  InitEngineMsg(this.sendPort, this.token);
 }
 
 class UpdateSensorMsg {
@@ -24,6 +32,8 @@ class SimulateOutageMsg {
   final bool isOutage;
   SimulateOutageMsg(this.isOutage);
 }
+
+class CalibrateMountMsg {}
 
 class EngineStateUpdate {
   final LatLng position;
@@ -46,13 +56,13 @@ class DeadReckoningEngine {
   final ReceivePort _receivePort = ReceivePort();
   Isolate? _isolate;
   
-  // Callback to emit updates to provider
   final void Function(EngineStateUpdate) onUpdate;
 
   DeadReckoningEngine({required this.onUpdate});
 
   Future<void> start() async {
-    _isolate = await Isolate.spawn(_engineEntry, InitEngineMsg(_receivePort.sendPort));
+    RootIsolateToken rootToken = RootIsolateToken.instance!;
+    _isolate = await Isolate.spawn(_engineEntry, InitEngineMsg(_receivePort.sendPort, rootToken));
     
     _receivePort.listen((message) {
       if (message is SendPort) {
@@ -80,73 +90,127 @@ class DeadReckoningEngine {
     _isolateSendPort?.send(SimulateOutageMsg(isOutage));
   }
 
+  void calibrateMount() {
+    _isolateSendPort?.send(CalibrateMountMsg());
+  }
+
   // --- Isolate Entry Point ---
-  static void _engineEntry(InitEngineMsg initMsg) {
+  static void _engineEntry(InitEngineMsg initMsg) async {
+    BackgroundIsolateBinaryMessenger.ensureInitialized(initMsg.token);
+    
     final receivePort = ReceivePort();
     initMsg.sendPort.send(receivePort.sendPort);
 
-    // Initial state
-    LatLng currentPosition = const LatLng(0, 0);
-    double currentBearing = 0.0;
-    double currentSpeed = 0.0;
-    double driftMeters = 0.0;
-    bool isOutage = false;
+    // Initialize modules
+    final calibrator = AlignmentCalibrator();
+    final kf = KalmanFilter();
+    final mapMatcher = MapMatcher();
+    final aiEstimator = OnnxVelocityEstimator();
+    
+    await mapMatcher.loadMap('assets/maps/sample_road_network.json');
+    await aiEstimator.init();
 
-    // Time tracking for integration
+    bool isOutage = false;
+    double driftMeters = 0.0;
+    LatLng startOutagePos = const LatLng(0, 0);
+    
     int lastTime = DateTime.now().millisecondsSinceEpoch;
+    int lastGpsTime = DateTime.now().millisecondsSinceEpoch;
+
+    // AI sliding window (6 channels, 100 samples)
+    List<double> imuWindow = [];
 
     receivePort.listen((message) {
       int now = DateTime.now().millisecondsSinceEpoch;
       double dt = (now - lastTime) / 1000.0;
       lastTime = now;
 
-      if (message is UpdateGpsMsg) {
+      // Seamless Deficit Handler: Auto-outage if GPS lost for >1.0s
+      if (!isOutage && (now - lastGpsTime > 1000) && kf.lat != 0) {
+        isOutage = true;
+        startOutagePos = kf.position;
+        driftMeters = 0.0;
+      }
+
+      if (message is CalibrateMountMsg) {
+        calibrator.forceCalibration();
+      } else if (message is UpdateGpsMsg) {
+        lastGpsTime = now;
         if (!isOutage) {
-          currentPosition = message.position;
-          currentBearing = message.bearing;
-          currentSpeed = message.speed;
-          driftMeters = 0.0; // Reset drift when we have strong GPS
+          if (kf.lat == 0) { // first fix
+            kf.initState(message.position, message.bearing, message.speed);
+          } else {
+            kf.updateGNSS(message.position, message.bearing, message.speed);
+          }
+          driftMeters = 0.0;
           
           initMsg.sendPort.send(EngineStateUpdate(
-            position: currentPosition,
-            bearing: currentBearing,
-            speed: currentSpeed,
+            position: kf.position,
+            bearing: kf.bearing,
+            speed: kf.speed,
             driftMeters: driftMeters,
             isOutage: isOutage,
           ));
+        } else {
+          // Smoothly transition from Outage back to GNSS
+          kf.updateGNSS(message.position, message.bearing, message.speed);
+          isOutage = false;
+          driftMeters = 0.0;
         }
       } else if (message is UpdateSensorMsg) {
-        if (isOutage) {
-          // Simple Dead Reckoning logic based on IMU
-          // (In a real scenario, this involves a Kalman Filter with Matrix math)
-          // For demo: Use gyroZ for turn rate, accelY for acceleration
-          double turnRate = message.data.gyroZ; // simplified
-          double forwardAccel = message.data.accelY; // simplified
-          
-          currentSpeed += forwardAccel * dt;
-          if (currentSpeed < 0) currentSpeed = 0; // No reverse for simplicity
-          
-          currentBearing += (turnRate * 180 / pi) * dt;
-          currentBearing = currentBearing % 360;
+        // 1. Calibrate / Project to vehicle frame
+        calibrator.feedSensor(message.data.accelX, message.data.accelY, message.data.accelZ);
+        List<double> vAccel = calibrator.projectToVehicleFrame(message.data.accelX, message.data.accelY, message.data.accelZ);
+        List<double> vGyro = calibrator.projectToVehicleFrame(message.data.gyroX, message.data.gyroY, message.data.gyroZ);
+        
+        // Use vehicle Forward Accel (X-axis) and Yaw Rate (Z-axis)
+        double forwardAccel = vAccel[0];
+        double yawRate = vGyro[2];
 
-          // Calculate new position
-          double dist = currentSpeed * dt;
-          driftMeters += dist * 0.05; // Simulate cumulative drift (5% error)
+        // Append to sliding window (normalized)
+        imuWindow.addAll([vAccel[0], vAccel[1], vAccel[2], vGyro[0], vGyro[1], vGyro[2]]);
+        if (imuWindow.length > 600) {
+          imuWindow.removeRange(0, 6);
+        }
 
-          // Haversine approximation to move lat/lng
-          final Distance distance = const Distance();
-          currentPosition = distance.offset(currentPosition, dist, currentBearing);
+        if (kf.lat != 0) {
+          // 2. Predict step
+          kf.predict(dt, forwardAccel, yawRate);
 
-          initMsg.sendPort.send(EngineStateUpdate(
-            position: currentPosition,
-            bearing: currentBearing,
-            speed: currentSpeed,
-            driftMeters: driftMeters,
-            isOutage: isOutage,
-          ));
+          if (isOutage) {
+            // 3. AI Dead Reckoning Update & NHC Constraint
+            if (imuWindow.length == 600) {
+              Float32List tensorData = Float32List.fromList(imuWindow);
+              double aiVelocity = aiEstimator.estimateVelocity(tensorData);
+              kf.updateAI(aiVelocity);
+            }
+
+            // 4. Offline Map Matching Snapping
+            LatLng snappedPos = mapMatcher.snapToMap(kf.position, kf.bearing);
+            kf.lat = snappedPos.latitude;
+            kf.lon = snappedPos.longitude;
+
+            // Compute drift
+            final Distance distance = const Distance();
+            driftMeters = distance.as(LengthUnit.Meter, startOutagePos, kf.position);
+
+            initMsg.sendPort.send(EngineStateUpdate(
+              position: kf.position,
+              bearing: kf.bearing,
+              speed: kf.speed,
+              driftMeters: driftMeters,
+              isOutage: isOutage,
+            ));
+          }
         }
       } else if (message is SimulateOutageMsg) {
-        isOutage = message.isOutage;
+        if (message.isOutage && !isOutage) {
+          isOutage = true;
+          startOutagePos = kf.position;
+          driftMeters = 0.0;
+        } else if (!message.isOutage) {
+          isOutage = false;
+        }
       }
     });
   }

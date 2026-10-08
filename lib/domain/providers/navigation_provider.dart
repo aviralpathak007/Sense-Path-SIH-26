@@ -76,8 +76,8 @@ class NavigationNotifier extends Notifier<KinematicsState> {
   }
 
   void calibrateMount() {
-    state = state.copyWith(isAligned: true);
-    // Real implementation would calculate alignment matrix between phone and car
+    state = state.copyWith(isAligned: false); // Set false until calibration complete
+    _engine.calibrateMount();
   }
 
   void loadPresetScenario() {
